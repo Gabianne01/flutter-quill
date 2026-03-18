@@ -3,7 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/services.dart' show ClipboardData, Clipboard;
 import 'package:flutter/widgets.dart';
 import 'package:meta/meta.dart';
-
+import '../document/nodes/node.dart';
 import '../../quill_delta.dart';
 import '../common/structs/image_url.dart';
 import '../common/structs/offset_value.dart';
@@ -13,6 +13,8 @@ import '../document/attribute.dart';
 import '../document/document.dart';
 import '../document/nodes/embeddable.dart';
 import '../document/nodes/leaf.dart';
+import '../document/nodes/block.dart';
+import '../document/nodes/line.dart';
 import '../document/structs/doc_change.dart';
 import '../document/style.dart';
 import '../editor/config/editor_config.dart';
@@ -110,6 +112,14 @@ class QuillController extends ChangeNotifier {
   /// and that has not been applied yet.
   /// It gets reset after each format action within the [document].
   Style toggledStyle = const Style();
+  final Style _paragraphDefaults = Style.attr({
+  Attribute.font.key: Attribute.fromKeyValue(Attribute.font.key, 'Bornia')!,
+  Attribute.size.key: Attribute.fromKeyValue(Attribute.size.key, '18')!,
+});
+
+bool _caretOnEmptyParagraphAfterHeader = false;
+Style _afterHeaderPendingStyle = const Style();
+bool _isNormalizing = false;
 
   /// [raw_editor_actions] handling of backspace event may need to force the style displayed in the toolbar
   void forceToggledStyle(Style style) {
@@ -139,11 +149,15 @@ class QuillController extends ChangeNotifier {
 
   /// Only attributes applied to all characters within this range are
   /// included in the result.
-  Style getSelectionStyle() {
-    return document
-        .collectStyle(selection.start, selection.end - selection.start)
-        .mergeAll(toggledStyle);
+ Style getSelectionStyle() {
+  if (_caretOnEmptyParagraphAfterHeader) {
+    return _paragraphDefaults.mergeAll(_afterHeaderPendingStyle);
   }
+
+  return document
+      .collectStyle(selection.start, selection.end - selection.start)
+      .mergeAll(toggledStyle);
+}
 
   // Increases or decreases the indent of the current selection by 1.
   void indentSelection(bool isIncrease) {
@@ -264,6 +278,103 @@ class QuillController extends ChangeNotifier {
         const TextSelection.collapsed(offset: 0));
   }
 
+Style _inlineOnly(Style style) {
+  final ignored = style.attributes.values.where(
+    (a) => !a.isInline || a.key == Attribute.link.key,
+  );
+  return style.removeAll(ignored.toSet());
+}
+
+Attribute? _headerAttrForLine(Line line) {
+  final direct = line.style.attributes[Attribute.header.key];
+  if (direct != null) return direct;
+
+  final parent = line.parent;
+  if (parent is Block) {
+    return parent.style.attributes[Attribute.header.key];
+  }
+
+  return null;
+}
+
+void _normalizeLineToStyle(Line line, Style inlineStyle) {
+  final start = line.documentOffset;
+  final textLength = line.length - 1; // 🔴 exclude newline
+
+  if (textLength <= 0) return;
+
+  for (final attr in inlineStyle.values) {
+    formatText(
+      start,
+      textLength,
+      attr,
+      shouldNotifyListeners: false,
+    );
+  }
+}
+
+  void _normalizeLinesBetween(int a, int b) {
+  final start = math.min(a, b);
+  final end   = math.max(a, b);
+
+  int probe = math.max(0, math.min(start, document.length - 2));
+
+  while (probe <= end && probe < document.length - 1) {
+    final line = document.querySegmentLeafNode(probe).line;
+    if (line == null) break;
+
+    _normalizeIfMixed(line);
+
+    probe = line.documentOffset + line.length;
+  }
+}
+
+void _normalizeIfMixed(Line line) {
+  if (line.length <= 1) return;
+
+  final start = line.documentOffset;
+  final end   = start + line.length - 1;
+
+  Style base = _inlineOnly(document.collectStyle(start + 1, 0));
+
+  // 🔧 Fallback if no inline style exists
+  final hasFont = base.attributes.containsKey(Attribute.font.key);
+final hasSize = base.attributes.containsKey(Attribute.size.key);
+
+if (!hasFont || !hasSize) {
+    final header =
+    _headerAttrForLine(line)?.value as int?;
+
+    double size;
+    switch (header) {
+      case 1:
+        size = 36;
+        break;
+      case 2:
+        size = 26;
+        break;
+      default:
+        size = 18;
+    }
+
+    base = Style.attr({
+      Attribute.font.key:
+          Attribute.fromKeyValue(Attribute.font.key, 'Bornia')!,
+      Attribute.size.key:
+          Attribute.fromKeyValue(Attribute.size.key, size.toString())!,
+    });
+  }
+
+  for (int i = start + 1; i < end; i++) {
+    final s = _inlineOnly(document.collectStyle(i, 0));
+
+    if (s != base) {
+      _normalizeLineToStyle(line, base);
+      return;
+    }
+  }
+}
+
   void replaceText(
     int index,
     int len,
@@ -273,24 +384,106 @@ class QuillController extends ChangeNotifier {
     @experimental bool shouldNotifyListeners = true,
   }) {
     assert(data is String || data is Embeddable || data is Delta);
+    final editStart = index;
 
     if (onReplaceText != null && !onReplaceText!(index, len, data)) {
       return;
     }
 
     Delta? delta;
-    Style? style;
-    if (len > 0 || data is! String || data.isNotEmpty) {
-      delta = document.replace(index, len, data);
+   Style? style;
+   final anchorLine =
+    document.querySegmentLeafNode(index).line;
 
-      /// Remove block styles as they can only be attached to line endings
-      style = Style.attr(Map<String, Attribute>.fromEntries(toggledStyle
-          .attributes.entries
-          .where((a) => a.value.scope != AttributeScope.block)));
+final anchorHeader =
+    anchorLine != null ? _headerAttrForLine(anchorLine) : null;
+
+final isEmptyLine =
+    anchorLine?.toPlainText().trim().isEmpty ?? false;
+
+final anchorInline = isEmptyLine
+    ? _inlineOnly(
+        _caretOnEmptyParagraphAfterHeader
+            ? _paragraphDefaults.mergeAll(_afterHeaderPendingStyle)
+            : toggledStyle,
+      )
+    : _inlineOnly(document.collectStyle(index, 0));
+   
+if (len > 0 || data is! String || data.isNotEmpty) {
+  delta = document.replace(index, len, data);
+
+  final sourceStyle = _caretOnEmptyParagraphAfterHeader
+    ? _paragraphDefaults.mergeAll(_afterHeaderPendingStyle)
+    : toggledStyle;
+    final isMultiline =
+    data is String &&
+    data.contains('\n') &&
+    data.length > 1;
+
+if (isMultiline) {
+  final firstLine =
+      document.querySegmentLeafNode(index).line;
+
+  final endOffset =
+      index + (data is String ? data.length : 1);
+
+  Line? line = firstLine;
+
+  while (line != null &&
+         line.documentOffset <= endOffset) {
+
+    // 🔴 Remove ANY existing header (including the one Quill moved)
+    final existingHeader = _headerAttrForLine(line);
+
+    if (existingHeader != null) {
+      formatText(
+        line.documentOffset,
+        0,
+        Attribute.clone(existingHeader, null),
+        shouldNotifyListeners: false,
+      );
+    }
+
+    // ✅ Apply header ONLY to first line
+    if (line == firstLine && anchorHeader != null) {
+      formatText(
+        line.documentOffset,
+        0,
+        anchorHeader,
+        shouldNotifyListeners: false,
+      );
+    }
+
+   final isFirst = line == firstLine;
+
+if (isFirst) {
+  // keep header styling
+  _normalizeLineToStyle(line, anchorInline);
+} else {
+  // force paragraph defaults
+  _normalizeLineToStyle(line, _paragraphDefaults);
+}
+
+    final nextOffset = line.documentOffset + line.length;
+    if (nextOffset >= document.length) break;
+
+    line = document.querySegmentLeafNode(nextOffset).line;
+  }
+}
+
+  style = Style.attr(Map<String, Attribute>.fromEntries(
+    sourceStyle.attributes.entries.where(
+      (a) => a.value.scope != AttributeScope.block,
+    ),
+  ));
+
       var shouldRetainDelta = style.isNotEmpty &&
           delta.isNotEmpty &&
           delta.length <= 2 &&
           delta.last.isInsert;
+      if (data is String && data.contains('\n') && data.length > 1) {
+  shouldRetainDelta = false;
+}    
       if (shouldRetainDelta &&
           style.isNotEmpty &&
           delta.length == 2 &&
@@ -308,6 +501,13 @@ class QuillController extends ChangeNotifier {
           ..retain(data is String ? data.length : 1, style.toJson());
         document.compose(retainDelta, ChangeSource.local);
       }
+      // 👇 ADD THIS
+  if (_caretOnEmptyParagraphAfterHeader &&
+      data is String &&
+      data.isNotEmpty &&
+      !data.contains('\n')) {
+    _afterHeaderPendingStyle = const Style();
+  }
     }
 
     if (textSelection != null) {
@@ -319,22 +519,67 @@ class QuillController extends ChangeNotifier {
           ..insert(data)
           ..delete(len);
         final positionDelta = getPositionDelta(user, delta);
-        _updateSelection(
-            textSelection.copyWith(
-              baseOffset: textSelection.baseOffset + positionDelta,
-              extentOffset: textSelection.extentOffset + positionDelta,
-            ),
-            insertNewline: data == '\n');
+       _updateSelection(
+  textSelection.copyWith(
+    baseOffset: textSelection.baseOffset + positionDelta,
+    extentOffset: textSelection.extentOffset + positionDelta,
+  ),
+  insertNewline: data == '\n',
+);
       }
     }
 
     if (ignoreFocus) {
       ignoreFocusOnTextChange = true;
     }
-    if (shouldNotifyListeners) {
-      notifyListeners();
-    }
+int insertedLength = 1;
+
+if (data is String) {
+  insertedLength = data.length;
+} else if (data is Embeddable) {
+  insertedLength = 1;
+}
+
+final editEnd = index + math.max(len, insertedLength);
+
+final int normalizeStart =
+    editStart > 0 ? editStart - 1 : 0;
+
+final int normalizeEnd =
+    ((editEnd + 1).toInt() < document.length)
+        ? (editEnd + 1).toInt()
+        : document.length - 1;
+
+final isMultiline =
+    data is String &&
+    data.contains('\n') &&
+    data.length > 1;
+
+if (!_isNormalizing && !isMultiline) {
+  _isNormalizing = true;
+  _normalizeLinesBetween(normalizeStart, normalizeEnd);
+  _isNormalizing = false;
+}
+
+if (shouldNotifyListeners) {
+  notifyListeners();
+}
     ignoreFocusOnTextChange = false;
+ 
+ final isDelete = data is String && data.isEmpty && len > 0;
+
+if (isDelete) {
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    if (_isDisposed) return;
+
+    final sel = selection;
+
+    updateSelection(
+      TextSelection.collapsed(offset: sel.baseOffset),
+      ChangeSource.local,
+    );
+  });
+}
   }
 
   /// Called in two cases:
@@ -352,31 +597,38 @@ class QuillController extends ChangeNotifier {
   }
 
   void formatText(
-    int index,
-    int len,
-    Attribute? attribute, {
-    @experimental bool shouldNotifyListeners = true,
-  }) {
-    if (len == 0 && attribute!.key != Attribute.link.key) {
-      // Add the attribute to our toggledStyle.
-      // It will be used later upon insertion.
-      toggledStyle = toggledStyle.put(attribute);
+  int index,
+  int len,
+  Attribute? attribute, {
+  @experimental bool shouldNotifyListeners = true,
+}) {
+  if (len == 0 && attribute != null && attribute.key != Attribute.link.key) {
+    if (_caretOnEmptyParagraphAfterHeader && attribute.isInline) {
+      _afterHeaderPendingStyle = _afterHeaderPendingStyle.put(attribute);
+      if (shouldNotifyListeners) {
+        notifyListeners();
+      }
+      return;
     }
 
-    final change = document.format(index, len, attribute);
-    // Transform selection against the composed change and give priority to
-    // the change. This is needed in cases when format operation actually
-    // inserts data into the document (e.g. embeds).
-    final adjustedSelection = selection.copyWith(
-        baseOffset: change.transformPosition(selection.baseOffset),
-        extentOffset: change.transformPosition(selection.extentOffset));
-    if (selection != adjustedSelection) {
-      _updateSelection(adjustedSelection);
-    }
-    if (shouldNotifyListeners) {
-      notifyListeners();
-    }
+    toggledStyle = toggledStyle.put(attribute);
   }
+
+  final change = document.format(index, len, attribute);
+
+  final adjustedSelection = selection.copyWith(
+    baseOffset: change.transformPosition(selection.baseOffset),
+    extentOffset: change.transformPosition(selection.extentOffset),
+  );
+
+  if (selection != adjustedSelection) {
+    _updateSelection(adjustedSelection);
+  }
+
+  if (shouldNotifyListeners) {
+    notifyListeners();
+  }
+}
 
   void formatSelection(Attribute? attribute,
       {@experimental bool shouldNotifyListeners = true}) {
@@ -461,28 +713,105 @@ class QuillController extends ChangeNotifier {
     super.dispose();
   }
 
-  void _updateSelection(TextSelection textSelection,
-      {bool insertNewline = false}) {
-    _selection = textSelection;
-    final end = document.length - 1;
-    _selection = selection.copyWith(
-        baseOffset: math.min(selection.baseOffset, end),
-        extentOffset: math.min(selection.extentOffset, end));
-    if (keepStyleOnNewLine) {
-      if (insertNewline && selection.start > 0) {
-        final style = document.collectStyle(selection.start - 1, 0);
-        final ignoredStyles = style.attributes.values.where(
-          (s) => !s.isInline || s.key == Attribute.link.key,
-        );
-        toggledStyle = style.removeAll(ignoredStyles.toSet());
-      } else {
-        toggledStyle = const Style();
-      }
-    } else {
-      toggledStyle = const Style();
+  void _updateSelection(TextSelection textSelection, {bool insertNewline = false}) {
+  _selection = textSelection;
+  final end = document.length - 1;
+  _selection = selection.copyWith(
+    baseOffset: math.min(selection.baseOffset, end),
+    extentOffset: math.min(selection.extentOffset, end),
+  );
+
+  bool emptyParagraphAfterHeader = false;
+
+  final segment = document.querySegmentLeafNode(selection.start);
+  final line = segment.line;
+
+  if (line != null && line.isEmpty) {
+
+Node? probe = line.previous;
+
+/// Walk upward until we hit a non-empty Line
+while (probe != null) {
+  if (probe is Line) {
+    if (probe.toPlainText().trim().isNotEmpty) {
+      break; // found meaningful line
     }
-    onSelectionChanged?.call(textSelection);
   }
+
+  probe = probe.previous;
+}
+
+if (probe is Line) {
+  final prevIsHeader =
+      probe.style.attributes.containsKey(Attribute.header.key) ||
+      (probe.parent is Block &&
+          (probe.parent as Block)
+              .style
+              .attributes
+              .containsKey(Attribute.header.key));
+
+  emptyParagraphAfterHeader = prevIsHeader;
+}
+  }
+
+if (!emptyParagraphAfterHeader) {
+  _afterHeaderPendingStyle = const Style();
+}
+
+  _caretOnEmptyParagraphAfterHeader = emptyParagraphAfterHeader;
+
+  if (emptyParagraphAfterHeader) {
+    // Keep typing state clean; toolbar style is handled by getSelectionStyle().
+    toggledStyle = const Style();
+    onSelectionChanged?.call(textSelection);
+    return;
+  }
+
+  if (keepStyleOnNewLine) {
+  if (insertNewline) {
+    final segment = document.querySegmentLeafNode(selection.start);
+    final currentLine = segment.line;
+
+    Style style = const Style();
+
+    final atStartOfNonEmptyLine =
+        selection.isCollapsed &&
+        currentLine != null &&
+        selection.start == currentLine.documentOffset &&
+        currentLine.toPlainText().trim().isNotEmpty;
+
+    if (atStartOfNonEmptyLine) {
+      // Special case:
+      // Enter pressed at the start of a styled line, or split produced a
+      // non-empty right-side line and the caret is now at its beginning.
+      //
+      // In this case, sample style from the current line, not the left side.
+      final probeOffset = math.min(
+        selection.start,
+        document.length - 2,
+      );
+
+      style = document.collectStyle(probeOffset, 0);
+    } else if (selection.start > 0) {
+      // Normal Enter behavior:
+      // inherit from the character/line immediately before the caret.
+      style = document.collectStyle(selection.start - 1, 0);
+    }
+
+    final ignoredStyles = style.attributes.values.where(
+      (s) => !s.isInline || s.key == Attribute.link.key,
+    );
+
+    toggledStyle = style.removeAll(ignoredStyles.toSet());
+  } else {
+    toggledStyle = const Style();
+  }
+} else {
+  toggledStyle = const Style();
+}
+
+  onSelectionChanged?.call(textSelection);
+}
 
   /// Given offset, find its leaf node in document
   Leaf? queryNode(int offset) {
@@ -625,15 +954,43 @@ class QuillController extends ChangeNotifier {
     // Snapshot the input before using `await`.
     // See https://github.com/flutter/flutter/issues/11427
     final plainText = (await Clipboard.getData(Clipboard.kTextPlain))?.text;
+final isCollapsed = selection.isCollapsed;
 
+final currentLine =
+    document.querySegmentLeafNode(selection.start).line;
+
+final isEmptyLine =
+    currentLine?.toPlainText().trim().isEmpty ?? false;
+
+final allowRichPaste = isCollapsed && isEmptyLine;
     if (plainText != null) {
-      final plainTextToPaste = await getTextToPaste(plainText);
-      if (pastePlainTextOrDelta(plainTextToPaste,
-          pastePlainText: _pastePlainText, pasteDelta: _pasteDelta)) {
-        updateEditor?.call();
-        return true;
-      }
+  final plainTextToPaste = await getTextToPaste(plainText);
+
+  if (allowRichPaste) {
+    // ✅ keep current behavior (rich paste)
+    if (pastePlainTextOrDelta(
+      plainTextToPaste,
+      pastePlainText: _pastePlainText,
+      pasteDelta: _pasteDelta,
+    )) {
+      updateEditor?.call();
+      return true;
     }
+  } else {
+    // 🔴 FORCE your pipeline
+    replaceText(
+      selection.start,
+      selection.end - selection.start,
+      plainTextToPaste,
+      TextSelection.collapsed(
+        offset: selection.start + plainTextToPaste.length,
+      ),
+    );
+
+    updateEditor?.call();
+    return true;
+  }
+}
 
     final onUnprocessedPaste = clipboardConfig?.onUnprocessedPaste;
     if (onUnprocessedPaste != null) {
