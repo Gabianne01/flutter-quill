@@ -765,11 +765,24 @@ if (!emptyParagraphAfterHeader) {
   _caretOnEmptyParagraphAfterHeader = emptyParagraphAfterHeader;
 
   if (emptyParagraphAfterHeader) {
-    // Keep typing state clean; toolbar style is handled by getSelectionStyle().
-    toggledStyle = const Style();
-    onSelectionChanged?.call(textSelection);
-    return;
-  }
+  final prevStyle = document.collectStyle(
+    selection.start > 0 ? selection.start - 1 : 0,
+    0,
+  );
+
+  final color = prevStyle.attributes[Attribute.color.key];
+  final bg = prevStyle.attributes[Attribute.background.key];
+
+  Style preserved = const Style();
+
+  if (color != null) preserved = preserved.put(color);
+  if (bg != null) preserved = preserved.put(bg);
+
+  toggledStyle = preserved;
+
+  onSelectionChanged?.call(textSelection);
+  return;
+}
 
   if (keepStyleOnNewLine) {
   if (insertNewline) {
