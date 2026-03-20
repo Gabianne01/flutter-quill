@@ -764,7 +764,7 @@ if (!emptyParagraphAfterHeader) {
 
   _caretOnEmptyParagraphAfterHeader = emptyParagraphAfterHeader;
 
-  if (emptyParagraphAfterHeader) {
+ if (emptyParagraphAfterHeader) {
   final prevStyle = document.collectStyle(
     selection.start > 0 ? selection.start - 1 : 0,
     0,
@@ -778,7 +778,11 @@ if (!emptyParagraphAfterHeader) {
   if (color != null) preserved = preserved.put(color);
   if (bg != null) preserved = preserved.put(bg);
 
-  toggledStyle = preserved;
+  _afterHeaderPendingStyle = preserved;
+
+  // Keep typing state clean; getSelectionStyle() will merge
+  // paragraph defaults + _afterHeaderPendingStyle.
+  toggledStyle = const Style();
 
   onSelectionChanged?.call(textSelection);
   return;
