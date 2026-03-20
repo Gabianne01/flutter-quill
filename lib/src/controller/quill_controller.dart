@@ -280,7 +280,11 @@ bool _isNormalizing = false;
 
 Style _inlineOnly(Style style) {
   final ignored = style.attributes.values.where(
-    (a) => !a.isInline || a.key == Attribute.link.key,
+    (a) =>
+        !a.isInline ||
+        a.key == Attribute.link.key ||
+        a.key == Attribute.color.key ||
+        a.key == Attribute.background.key,
   );
   return style.removeAll(ignored.toSet());
 }
