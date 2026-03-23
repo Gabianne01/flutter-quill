@@ -763,6 +763,26 @@ if (isDelete) {
     super.dispose();
   }
 
+  Line? _previousNonEmptyLineBefore(Line line) {
+  int offset = line.documentOffset - 1;
+
+  while (offset >= 0) {
+    final seg = document.querySegmentLeafNode(offset);
+    final candidate = seg.line;
+    if (candidate == null) return null;
+
+    if (candidate.toPlainText().trim().isNotEmpty) {
+      return candidate;
+    }
+
+    offset = candidate.documentOffset - 1;
+  }
+
+  return null;
+}
+
+bool _isHeaderLine(Line? line) => line != null && _headerAttrForLine(line) != null;
+
   void _updateSelection(TextSelection textSelection, {bool insertNewline = false}) {
   _selection = textSelection;
   final end = document.length - 1;
@@ -771,51 +791,28 @@ if (isDelete) {
     extentOffset: math.min(selection.extentOffset, end),
   );
 
-  bool emptyParagraphAfterHeader = false;
+   bool emptyParagraphAfterHeader = false;
 
   final segment = document.querySegmentLeafNode(selection.start);
   final line = segment.line;
 
-  if (line != null && line.isEmpty) {
-
-Node? probe = line.previous;
-
-/// Walk upward until we hit a non-empty Line
-while (probe != null) {
-  if (probe is Line) {
-    if (probe.toPlainText().trim().isNotEmpty) {
-      break; // found meaningful line
-    }
+  if (line != null && line.toPlainText().trim().isEmpty) {
+    final prevLine = _previousNonEmptyLineBefore(line);
+    emptyParagraphAfterHeader = _isHeaderLine(prevLine);
   }
 
-  probe = probe.previous;
-}
-
-if (probe is Line) {
-  final prevIsHeader =
-      probe.style.attributes.containsKey(Attribute.header.key) ||
-      (probe.parent is Block &&
-          (probe.parent as Block)
-              .style
-              .attributes
-              .containsKey(Attribute.header.key));
-
-  emptyParagraphAfterHeader = prevIsHeader;
-}
+  if (!emptyParagraphAfterHeader) {
+    _afterHeaderPendingStyle = const Style();
   }
-
-if (!emptyParagraphAfterHeader) {
-  _afterHeaderPendingStyle = const Style();
-}
 
   _caretOnEmptyParagraphAfterHeader = emptyParagraphAfterHeader;
 
   if (emptyParagraphAfterHeader) {
-    // Keep typing state clean; toolbar style is handled by getSelectionStyle().
     toggledStyle = const Style();
     onSelectionChanged?.call(textSelection);
     return;
   }
+
 
   if (keepStyleOnNewLine) {
   if (insertNewline) {
