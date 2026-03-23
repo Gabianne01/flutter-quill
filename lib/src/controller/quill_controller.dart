@@ -400,8 +400,12 @@ if (!hasFont || !hasSize) {
    final anchorLine =
     document.querySegmentLeafNode(index).line;
 
+final prevLine = document.querySegmentLeafNode(
+  math.max(0, index - 1),
+).line;
+
 final anchorHeader =
-    anchorLine != null ? _headerAttrForLine(anchorLine) : null;
+    prevLine != null ? _headerAttrForLine(prevLine) : null;
 
 final isEmptyLine =
     anchorLine?.isEmpty ?? false;
