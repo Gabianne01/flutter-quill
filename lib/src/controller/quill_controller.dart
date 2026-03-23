@@ -417,9 +417,55 @@ final anchorInline = isEmptyLine
 if (len > 0 || data is! String || data.isNotEmpty) {
   delta = document.replace(index, len, data);
 
+  // 🔥 HARD FIX: strip inherited inline styles after header
+if (_caretOnEmptyParagraphAfterHeader &&
+    data is String &&
+    data.isNotEmpty &&
+    !data.contains('\n')) {
+
+  final int length = data.length;
+
+  final prevStyle = document.collectStyle(
+    index > 0 ? index - 1 : 0,
+    0,
+  );
+
+  final userStyle = toggledStyle;
+
+  final Delta fixDelta = Delta()..retain(index);
+
+  final Map<String, dynamic> attrs = {};
+
+  // ✅ enforce your paragraph defaults
+  attrs[Attribute.font.key] =
+      Attribute.fromKeyValue(Attribute.font.key, 'Bornia')!.value;
+
+  attrs[Attribute.size.key] =
+      Attribute.fromKeyValue(Attribute.size.key, '18')!.value;
+
+  // 🔴 remove inherited inline attrs (unless user set them)
+  for (final entry in prevStyle.attributes.entries) {
+    final key = entry.key;
+
+    final isInline = entry.value.isInline;
+    if (!isInline) continue;
+
+    final userHasSet = userStyle.attributes.containsKey(key);
+
+    if (!userHasSet) {
+      attrs[key] = null; // 🔴 explicit removal
+    }
+  }
+
+  fixDelta.retain(length, attrs);
+
+  document.compose(fixDelta, ChangeSource.local);
+}
+
   final sourceStyle = _caretOnEmptyParagraphAfterHeader
     ? _paragraphDefaults.mergeAll(_afterHeaderPendingStyle)
     : toggledStyle;
+
     final isMultiline =
     data is String &&
     data.contains('\n') &&
@@ -506,13 +552,6 @@ if (isFirst) {
           ..retain(data is String ? data.length : 1, style.toJson());
         document.compose(retainDelta, ChangeSource.local);
       }
-      // 👇 ADD THIS
-  if (_caretOnEmptyParagraphAfterHeader &&
-      data is String &&
-      data.isNotEmpty &&
-      !data.contains('\n')) {
-    _afterHeaderPendingStyle = const Style();
-  }
     }
 
     if (textSelection != null) {
@@ -770,7 +809,13 @@ if (!emptyParagraphAfterHeader) {
 
   // 🔴 HARD RESET — no inheritance
   _afterHeaderPendingStyle = const Style();
-  toggledStyle = _paragraphDefaults;
+
+  // 👇 ONLY apply default style when this came from ENTER
+  if (insertNewline) {
+     toggledStyle = const Style();
+  } else {
+    toggledStyle = const Style();
+  }
 
   onSelectionChanged?.call(textSelection);
   return;
