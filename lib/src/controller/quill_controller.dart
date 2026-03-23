@@ -417,7 +417,6 @@ final anchorInline = isEmptyLine
 if (len > 0 || data is! String || data.isNotEmpty) {
   delta = document.replace(index, len, data);
 
-  // 🔥 HARD FIX: strip inherited inline styles after header
 if (_caretOnEmptyParagraphAfterHeader &&
     data is String &&
     data.isNotEmpty &&
@@ -552,12 +551,13 @@ if (isFirst) {
           ..retain(data is String ? data.length : 1, style.toJson());
         document.compose(retainDelta, ChangeSource.local);
       }
-      if (_caretOnEmptyParagraphAfterHeader &&
-    data is String &&
-    data.isNotEmpty &&
-    !data.contains('\n')) {
-  _afterHeaderPendingStyle = const Style();
-}
+      // 👇 ADD THIS
+  if (_caretOnEmptyParagraphAfterHeader &&
+      data is String &&
+      data.isNotEmpty &&
+      !data.contains('\n')) {
+    _afterHeaderPendingStyle = const Style();
+  }
     }
 
     if (textSelection != null) {
@@ -804,16 +804,30 @@ if (probe is Line) {
 }
   }
 
-
- if (!emptyParagraphAfterHeader) {
+if (!emptyParagraphAfterHeader) {
   _afterHeaderPendingStyle = const Style();
 }
 
-_caretOnEmptyParagraphAfterHeader = emptyParagraphAfterHeader;
+  _caretOnEmptyParagraphAfterHeader = emptyParagraphAfterHeader;
 
-if (emptyParagraphAfterHeader) {
-  // Clean baseline after header:
-  // paragraph defaults only, no inherited inline attrs.
+ if (emptyParagraphAfterHeader) {
+  final prevStyle = document.collectStyle(
+    selection.start > 0 ? selection.start - 1 : 0,
+    0,
+  );
+
+  final color = prevStyle.attributes[Attribute.color.key];
+  final bg = prevStyle.attributes[Attribute.background.key];
+
+  Style preserved = const Style();
+
+  if (color != null) preserved = preserved.put(color);
+  if (bg != null) preserved = preserved.put(bg);
+
+  _afterHeaderPendingStyle = preserved;
+
+  // Keep typing state clean; getSelectionStyle() will merge
+  // paragraph defaults + _afterHeaderPendingStyle.
   toggledStyle = const Style();
 
   onSelectionChanged?.call(textSelection);
