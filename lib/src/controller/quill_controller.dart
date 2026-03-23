@@ -380,7 +380,6 @@ if (!hasFont || !hasSize) {
   }
 }
 
-
   void replaceText(
     int index,
     int len,
@@ -405,7 +404,7 @@ final anchorHeader =
     anchorLine != null ? _headerAttrForLine(anchorLine) : null;
 
 final isEmptyLine =
-    anchorLine?.toPlainText().trim().isEmpty ?? false;
+    anchorLine?.isEmpty ?? false;
 
 final anchorInline = isEmptyLine
     ? _inlineOnly(
@@ -425,38 +424,44 @@ if (_caretOnEmptyParagraphAfterHeader &&
 
   final int length = data.length;
 
-  // What the line SHOULD use after a header:
-  // paragraph defaults + any user-toggled inline styles while still on the empty line
-  final desiredStyle = _paragraphDefaults.mergeAll(_afterHeaderPendingStyle);
+  final prevStyle = document.collectStyle(
+    index > 0 ? index - 1 : 0,
+    0,
+  );
 
-  // What Quill ACTUALLY put on the inserted character
-  final actualInsertedStyle = document.collectStyle(index, 0);
+  final userStyle = toggledStyle;
 
   final Delta fixDelta = Delta()..retain(index);
+
   final Map<String, dynamic> attrs = {};
 
-  // 1) Explicitly apply every desired inline attribute
-  for (final entry in desiredStyle.attributes.entries) {
-    final attr = entry.value;
-    if (!attr.isInline) continue;
-    attrs[entry.key] = attr.value;
-  }
+  // ✅ enforce your paragraph defaults
+  attrs[Attribute.font.key] =
+      Attribute.fromKeyValue(Attribute.font.key, 'Bornia')!.value;
 
-  // 2) Remove any extra inline attrs Quill inherited but we do NOT want
-  for (final entry in actualInsertedStyle.attributes.entries) {
-    final attr = entry.value;
-    if (!attr.isInline) continue;
+  attrs[Attribute.size.key] =
+      Attribute.fromKeyValue(Attribute.size.key, '18')!.value;
 
-    if (!desiredStyle.attributes.containsKey(entry.key)) {
-      attrs[entry.key] = null;
+  // 🔴 remove inherited inline attrs (unless user set them)
+  for (final entry in prevStyle.attributes.entries) {
+    final key = entry.key;
+
+    final isInline = entry.value.isInline;
+    if (!isInline) continue;
+
+    final userHasSet = userStyle.attributes.containsKey(key);
+
+    if (!userHasSet) {
+      attrs[key] = null; // 🔴 explicit removal
     }
   }
 
   fixDelta.retain(length, attrs);
+
   document.compose(fixDelta, ChangeSource.local);
 }
 
- final sourceStyle = _caretOnEmptyParagraphAfterHeader
+  final sourceStyle = _caretOnEmptyParagraphAfterHeader
     ? _paragraphDefaults.mergeAll(_afterHeaderPendingStyle)
     : toggledStyle;
 
@@ -547,6 +552,12 @@ if (isFirst) {
         document.compose(retainDelta, ChangeSource.local);
       }
       // 👇 ADD THIS
+  if (_caretOnEmptyParagraphAfterHeader &&
+      data is String &&
+      data.isNotEmpty &&
+      !data.contains('\n')) {
+    _afterHeaderPendingStyle = const Style();
+  }
     }
 
     if (textSelection != null) {
@@ -760,7 +771,7 @@ if (isDelete) {
     final candidate = seg.line;
     if (candidate == null) return null;
 
-    if (candidate.toPlainText().trim().isNotEmpty) {
+    if (candidate.length > 1) {
       return candidate;
     }
 
@@ -785,7 +796,7 @@ bool _isHeaderLine(Line? line) => line != null && _headerAttrForLine(line) != nu
   final segment = document.querySegmentLeafNode(selection.start);
   final line = segment.line;
 
-  if (line != null && line.toPlainText().trim().isEmpty) {
+  if (line != null && line.isEmpty) {
     final prevLine = _previousNonEmptyLineBefore(line);
     emptyParagraphAfterHeader = _isHeaderLine(prevLine);
   }
@@ -814,7 +825,7 @@ bool _isHeaderLine(Line? line) => line != null && _headerAttrForLine(line) != nu
         selection.isCollapsed &&
         currentLine != null &&
         selection.start == currentLine.documentOffset &&
-        currentLine.toPlainText().trim().isNotEmpty;
+        currentLine.length > 1;
 
     if (atStartOfNonEmptyLine) {
       // Special case:
@@ -996,7 +1007,7 @@ final currentLine =
     document.querySegmentLeafNode(selection.start).line;
 
 final isEmptyLine =
-    currentLine?.toPlainText().trim().isEmpty ?? false;
+    currentLine?.isEmpty ?? false;
 
 final allowRichPaste = isCollapsed && isEmptyLine;
     if (plainText != null) {
