@@ -765,19 +765,25 @@ if (!emptyParagraphAfterHeader) {
 
   _caretOnEmptyParagraphAfterHeader = emptyParagraphAfterHeader;
 
- if (emptyParagraphAfterHeader) {
+if (emptyParagraphAfterHeader) {
   final prevStyle = document.collectStyle(
     selection.start > 0 ? selection.start - 1 : 0,
     0,
   );
 
-  final color = prevStyle.attributes[Attribute.color.key];
-  final bg = prevStyle.attributes[Attribute.background.key];
+  final preservedAttrs = prevStyle.attributes.values.where(
+    (a) =>
+        a.isInline &&
+        a.key != Attribute.link.key &&
+        a.key != Attribute.font.key &&
+        a.key != Attribute.size.key,
+  );
 
   Style preserved = const Style();
 
-  if (color != null) preserved = preserved.put(color);
-  if (bg != null) preserved = preserved.put(bg);
+  for (final attr in preservedAttrs) {
+    preserved = preserved.put(attr);
+  }
 
   _afterHeaderPendingStyle = preserved;
 
