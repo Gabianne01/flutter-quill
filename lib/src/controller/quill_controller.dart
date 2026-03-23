@@ -812,9 +812,9 @@ if (!emptyParagraphAfterHeader) {
 
   // 👇 ONLY apply default style when this came from ENTER
   if (insertNewline) {
-     toggledStyle = const Style();
+     toggledStyle = _paragraphDefaults;
   } else {
-    toggledStyle = const Style();
+
   }
 
   onSelectionChanged?.call(textSelection);
