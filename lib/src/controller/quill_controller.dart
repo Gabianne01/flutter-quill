@@ -609,7 +609,15 @@ if (isDelete) {
 }) {
   if (len == 0 && attribute != null && attribute.key != Attribute.link.key) {
     if (_caretOnEmptyParagraphAfterHeader && attribute.isInline) {
-      _afterHeaderPendingStyle = _afterHeaderPendingStyle.put(attribute);
+      if (attribute.value == null) {
+  // REMOVE attribute
+  _afterHeaderPendingStyle =
+      _afterHeaderPendingStyle.removeAll({attribute});
+} else {
+  // ADD attribute
+  _afterHeaderPendingStyle =
+      _afterHeaderPendingStyle.put(attribute);
+}
       if (shouldNotifyListeners) {
         notifyListeners();
       }
