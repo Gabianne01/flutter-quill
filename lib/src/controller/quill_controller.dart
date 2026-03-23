@@ -380,6 +380,13 @@ if (!hasFont || !hasSize) {
   }
 }
 
+bool _isAllowedInlineAfterHeader(Attribute attr) {
+  if (!attr.isInline) return false;
+
+  return attr.key == Attribute.font.key ||
+         attr.key == Attribute.size.key;
+}
+
   void replaceText(
     int index,
     int len,
@@ -424,9 +431,14 @@ if (_caretOnEmptyParagraphAfterHeader &&
 
   final int length = data.length;
 
-  final prevStyle = _caretOnEmptyParagraphAfterHeader
+  Style prevStyleRaw = _caretOnEmptyParagraphAfterHeader
     ? _paragraphDefaults.mergeAll(_afterHeaderPendingStyle)
     : document.collectStyle(index > 0 ? index - 1 : 0, 0);
+
+final prevStyle = Style.attr({
+  for (final e in prevStyleRaw.attributes.entries)
+    if (_isAllowedInlineAfterHeader(e.value)) e.key: e.value,
+});
 
   final userStyle = toggledStyle;
 
