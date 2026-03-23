@@ -380,17 +380,6 @@ if (!hasFont || !hasSize) {
   }
 }
 
-Style _afterHeaderAllowedInlineOnly(Style style) {
-  final attrs = <String, Attribute>{};
-
-  final font = style.attributes[Attribute.font.key];
-  final size = style.attributes[Attribute.size.key];
-
-  if (font != null) attrs[Attribute.font.key] = font;
-  if (size != null) attrs[Attribute.size.key] = size;
-
-  return Style.attr(attrs);
-}
 
   void replaceText(
     int index,
@@ -436,50 +425,39 @@ if (_caretOnEmptyParagraphAfterHeader &&
 
   final int length = data.length;
 
-  final prevStyle = _caretOnEmptyParagraphAfterHeader
-    ? _afterHeaderAllowedInlineOnly(
-        _paragraphDefaults.mergeAll(_afterHeaderPendingStyle),
-      )
-    : _afterHeaderAllowedInlineOnly(
-        document.collectStyle(index > 0 ? index - 1 : 0, 0),
-      );
+  // What the line SHOULD use after a header:
+  // paragraph defaults + any user-toggled inline styles while still on the empty line
+  final desiredStyle = _paragraphDefaults.mergeAll(_afterHeaderPendingStyle);
 
-  final userStyle = toggledStyle;
+  // What Quill ACTUALLY put on the inserted character
+  final actualInsertedStyle = document.collectStyle(index, 0);
 
   final Delta fixDelta = Delta()..retain(index);
-
   final Map<String, dynamic> attrs = {};
 
-  // ✅ enforce your paragraph defaults
-  attrs[Attribute.font.key] =
-      Attribute.fromKeyValue(Attribute.font.key, 'Bornia')!.value;
+  // 1) Explicitly apply every desired inline attribute
+  for (final entry in desiredStyle.attributes.entries) {
+    final attr = entry.value;
+    if (!attr.isInline) continue;
+    attrs[entry.key] = attr.value;
+  }
 
-  attrs[Attribute.size.key] =
-      Attribute.fromKeyValue(Attribute.size.key, '18')!.value;
+  // 2) Remove any extra inline attrs Quill inherited but we do NOT want
+  for (final entry in actualInsertedStyle.attributes.entries) {
+    final attr = entry.value;
+    if (!attr.isInline) continue;
 
-  // 🔴 remove inherited inline attrs (unless user set them)
-  for (final entry in prevStyle.attributes.entries) {
-    final key = entry.key;
-
-    final isInline = entry.value.isInline;
-    if (!isInline) continue;
-
-    final userHasSet = userStyle.attributes.containsKey(key);
-
-    if (!userHasSet) {
-      attrs[key] = null; // 🔴 explicit removal
+    if (!desiredStyle.attributes.containsKey(entry.key)) {
+      attrs[entry.key] = null;
     }
   }
 
   fixDelta.retain(length, attrs);
-
   document.compose(fixDelta, ChangeSource.local);
 }
 
-  final sourceStyle = _caretOnEmptyParagraphAfterHeader
-    ? _afterHeaderAllowedInlineOnly(
-        _paragraphDefaults.mergeAll(_afterHeaderPendingStyle),
-      )
+ final sourceStyle = _caretOnEmptyParagraphAfterHeader
+    ? _paragraphDefaults.mergeAll(_afterHeaderPendingStyle)
     : toggledStyle;
 
     final isMultiline =
@@ -569,12 +547,6 @@ if (isFirst) {
         document.compose(retainDelta, ChangeSource.local);
       }
       // 👇 ADD THIS
-  if (_caretOnEmptyParagraphAfterHeader &&
-      data is String &&
-      data.isNotEmpty &&
-      !data.contains('\n')) {
-    _afterHeaderPendingStyle = const Style();
-  }
     }
 
     if (textSelection != null) {
