@@ -810,29 +810,12 @@ if (!emptyParagraphAfterHeader) {
 
   _caretOnEmptyParagraphAfterHeader = emptyParagraphAfterHeader;
 
- if (emptyParagraphAfterHeader) {
-  final prevStyle = document.collectStyle(
-    selection.start > 0 ? selection.start - 1 : 0,
-    0,
-  );
-
-  final color = prevStyle.attributes[Attribute.color.key];
-  final bg = prevStyle.attributes[Attribute.background.key];
-
-  Style preserved = const Style();
-
-  if (color != null) preserved = preserved.put(color);
-  if (bg != null) preserved = preserved.put(bg);
-
-  _afterHeaderPendingStyle = preserved;
-
-  // Keep typing state clean; getSelectionStyle() will merge
-  // paragraph defaults + _afterHeaderPendingStyle.
-  toggledStyle = const Style();
-
-  onSelectionChanged?.call(textSelection);
-  return;
-}
+  if (emptyParagraphAfterHeader) {
+    // Keep typing state clean; toolbar style is handled by getSelectionStyle().
+    toggledStyle = const Style();
+    onSelectionChanged?.call(textSelection);
+    return;
+  }
 
   if (keepStyleOnNewLine) {
   if (insertNewline) {
