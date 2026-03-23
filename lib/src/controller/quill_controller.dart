@@ -112,13 +112,21 @@ class QuillController extends ChangeNotifier {
   /// and that has not been applied yet.
   /// It gets reset after each format action within the [document].
   Style toggledStyle = const Style();
+
   final Style _paragraphDefaults = Style.attr({
   Attribute.font.key: Attribute.fromKeyValue(Attribute.font.key, 'Bornia')!,
   Attribute.size.key: Attribute.fromKeyValue(Attribute.size.key, '18')!,
+
+  // 🔴 CRITICAL: explicitly reset inline attributes
+  Attribute.bold.key: Attribute.clone(Attribute.bold, null),
+  Attribute.italic.key: Attribute.clone(Attribute.italic, null),
+  Attribute.underline.key: Attribute.clone(Attribute.underline, null),
+  Attribute.color.key: Attribute.clone(Attribute.color, null),
+  Attribute.background.key: Attribute.clone(Attribute.background, null),
 });
 
 bool _caretOnEmptyParagraphAfterHeader = false;
-Style _afterHeaderPendingStyle = const Style();
+
 bool _isNormalizing = false;
 
   /// [raw_editor_actions] handling of backspace event may need to force the style displayed in the toolbar
@@ -279,13 +287,13 @@ bool _isNormalizing = false;
   }
 
 Style _inlineOnly(Style style) {
-   final attrs = <String, Attribute>{};
+  final attrs = <String, Attribute>{};
 
-  final font = style.attributes[Attribute.font.key];
-  final size = style.attributes[Attribute.size.key];
-
-  if (font != null) attrs[Attribute.font.key] = font;
-  if (size != null) attrs[Attribute.size.key] = size;
+  for (final attr in style.attributes.values) {
+    if (attr.isInline) {
+      attrs[attr.key] = attr;
+    }
+  }
 
   return Style.attr(attrs);
 }
@@ -373,10 +381,16 @@ if (!hasFont || !hasSize) {
   for (int i = start + 1; i < end; i++) {
     final s = _inlineOnly(document.collectStyle(i, 0));
 
-    if (s != base) {
-      _normalizeLineToStyle(line, base);
-      return;
-    }
+  bool sameFont = s.attributes[Attribute.font.key] ==
+                base.attributes[Attribute.font.key];
+
+bool sameSize = s.attributes[Attribute.size.key] ==
+                base.attributes[Attribute.size.key];
+
+if (!sameFont || !sameSize) {
+  _normalizeLineToStyle(line, base);
+  return;
+}
   }
 }
 
