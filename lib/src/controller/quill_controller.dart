@@ -151,7 +151,7 @@ bool _isNormalizing = false;
   /// included in the result.
  Style getSelectionStyle() {
   if (_caretOnEmptyParagraphAfterHeader) {
-    return _paragraphDefaults.mergeAll(toggledStyle);
+    return _paragraphDefaults.mergeAll(_afterHeaderPendingStyle);
   }
 
   return document
@@ -409,7 +409,7 @@ final isEmptyLine =
 final anchorInline = isEmptyLine
     ? _inlineOnly(
         _caretOnEmptyParagraphAfterHeader
-            ? _paragraphDefaults.mergeAll(toggledStyle)
+            ? _paragraphDefaults.mergeAll(_afterHeaderPendingStyle)
             : toggledStyle,
       )
     : _inlineOnly(document.collectStyle(index, 0));
@@ -417,16 +417,9 @@ final anchorInline = isEmptyLine
 if (len > 0 || data is! String || data.isNotEmpty) {
   delta = document.replace(index, len, data);
 
-  final isFirstInsertAfterHeader =
-    _caretOnEmptyParagraphAfterHeader &&
-    data is String &&
-    data.isNotEmpty &&
-    !data.contains('\n');
-
-final sourceStyle = isFirstInsertAfterHeader
-    ? _paragraphDefaults.mergeAll(toggledStyle)
+  final sourceStyle = _caretOnEmptyParagraphAfterHeader
+    ? _paragraphDefaults.mergeAll(_afterHeaderPendingStyle)
     : toggledStyle;
-
     final isMultiline =
     data is String &&
     data.contains('\n') &&
@@ -507,17 +500,19 @@ if (isFirst) {
           shouldRetainDelta = false;
         }
       }
-      if (shouldRetainDelta || isFirstInsertAfterHeader) {
-  final retainDelta = Delta()
-    ..retain(index)
-    ..retain(data is String ? data.length : 1, style.toJson());
-  document.compose(retainDelta, ChangeSource.local);
-}
-
-if (isFirstInsertAfterHeader) {
-  _caretOnEmptyParagraphAfterHeader = false;
-}
-
+      if (shouldRetainDelta) {
+        final retainDelta = Delta()
+          ..retain(index)
+          ..retain(data is String ? data.length : 1, style.toJson());
+        document.compose(retainDelta, ChangeSource.local);
+      }
+      // 👇 ADD THIS
+  if (_caretOnEmptyParagraphAfterHeader &&
+      data is String &&
+      data.isNotEmpty &&
+      !data.contains('\n')) {
+    _afterHeaderPendingStyle = const Style();
+  }
     }
 
     if (textSelection != null) {
@@ -613,17 +608,16 @@ if (isDelete) {
   @experimental bool shouldNotifyListeners = true,
 }) {
   if (len == 0 && attribute != null && attribute.key != Attribute.link.key) {
-  if (attribute.value == null) {
-    toggledStyle = toggledStyle.removeAll({attribute});
-  } else {
+    if (_caretOnEmptyParagraphAfterHeader && attribute.isInline) {
+      _afterHeaderPendingStyle = _afterHeaderPendingStyle.put(attribute);
+      if (shouldNotifyListeners) {
+        notifyListeners();
+      }
+      return;
+    }
+
     toggledStyle = toggledStyle.put(attribute);
   }
-
-  if (shouldNotifyListeners) {
-    notifyListeners();
-  }
-  return;
-}
 
   final change = document.format(index, len, attribute);
 
@@ -765,10 +759,19 @@ if (probe is Line) {
 }
   }
 
-_caretOnEmptyParagraphAfterHeader = emptyParagraphAfterHeader;
+if (!emptyParagraphAfterHeader) {
+  _afterHeaderPendingStyle = const Style();
+}
 
-if (emptyParagraphAfterHeader) {
-  toggledStyle = const Style();
+  _caretOnEmptyParagraphAfterHeader = emptyParagraphAfterHeader;
+
+ if (emptyParagraphAfterHeader) {
+  _caretOnEmptyParagraphAfterHeader = true;
+
+  // 🔴 HARD RESET — no inheritance
+  _afterHeaderPendingStyle = const Style();
+  toggledStyle = _paragraphDefaults;
+
   onSelectionChanged?.call(textSelection);
   return;
 }
