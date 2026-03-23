@@ -279,14 +279,15 @@ bool _isNormalizing = false;
   }
 
 Style _inlineOnly(Style style) {
-  final ignored = style.attributes.values.where(
-    (a) =>
-        !a.isInline ||
-        a.key == Attribute.link.key ||
-        a.key == Attribute.color.key ||
-        a.key == Attribute.background.key,
-  );
-  return style.removeAll(ignored.toSet());
+   final attrs = <String, Attribute>{};
+
+  final font = style.attributes[Attribute.font.key];
+  final size = style.attributes[Attribute.size.key];
+
+  if (font != null) attrs[Attribute.font.key] = font;
+  if (size != null) attrs[Attribute.size.key] = size;
+
+  return Style.attr(attrs);
 }
 
 Attribute? _headerAttrForLine(Line line) {
