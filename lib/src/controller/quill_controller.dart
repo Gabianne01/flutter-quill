@@ -380,11 +380,16 @@ if (!hasFont || !hasSize) {
   }
 }
 
-bool _isAllowedInlineAfterHeader(Attribute attr) {
-  if (!attr.isInline) return false;
+Style _afterHeaderAllowedInlineOnly(Style style) {
+  final attrs = <String, Attribute>{};
 
-  return attr.key == Attribute.font.key ||
-         attr.key == Attribute.size.key;
+  final font = style.attributes[Attribute.font.key];
+  final size = style.attributes[Attribute.size.key];
+
+  if (font != null) attrs[Attribute.font.key] = font;
+  if (size != null) attrs[Attribute.size.key] = size;
+
+  return Style.attr(attrs);
 }
 
   void replaceText(
@@ -431,14 +436,13 @@ if (_caretOnEmptyParagraphAfterHeader &&
 
   final int length = data.length;
 
-  Style prevStyleRaw = _caretOnEmptyParagraphAfterHeader
-    ? _paragraphDefaults.mergeAll(_afterHeaderPendingStyle)
-    : document.collectStyle(index > 0 ? index - 1 : 0, 0);
-
-final prevStyle = Style.attr({
-  for (final e in prevStyleRaw.attributes.entries)
-    if (_isAllowedInlineAfterHeader(e.value)) e.key: e.value,
-});
+  final prevStyle = _caretOnEmptyParagraphAfterHeader
+    ? _afterHeaderAllowedInlineOnly(
+        _paragraphDefaults.mergeAll(_afterHeaderPendingStyle),
+      )
+    : _afterHeaderAllowedInlineOnly(
+        document.collectStyle(index > 0 ? index - 1 : 0, 0),
+      );
 
   final userStyle = toggledStyle;
 
@@ -473,7 +477,9 @@ final prevStyle = Style.attr({
 }
 
   final sourceStyle = _caretOnEmptyParagraphAfterHeader
-    ? _paragraphDefaults.mergeAll(_afterHeaderPendingStyle)
+    ? _afterHeaderAllowedInlineOnly(
+        _paragraphDefaults.mergeAll(_afterHeaderPendingStyle),
+      )
     : toggledStyle;
 
     final isMultiline =
