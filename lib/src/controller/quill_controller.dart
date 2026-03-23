@@ -404,7 +404,7 @@ final anchorHeader =
     anchorLine != null ? _headerAttrForLine(anchorLine) : null;
 
 final isEmptyLine =
-    anchorLine?.toPlainText().trim().isEmpty ?? false;
+    anchorLine?.isEmpty ?? false;
 
 final anchorInline = isEmptyLine
     ? _inlineOnly(
@@ -609,26 +609,14 @@ if (isDelete) {
 }) {
   if (len == 0 && attribute != null && attribute.key != Attribute.link.key) {
     if (_caretOnEmptyParagraphAfterHeader && attribute.isInline) {
-      if (attribute.value == null) {
-  // REMOVE attribute
-  _afterHeaderPendingStyle =
-      _afterHeaderPendingStyle.removeAll({attribute});
-} else {
-  // ADD attribute
-  _afterHeaderPendingStyle =
-      _afterHeaderPendingStyle.put(attribute);
-}
+      _afterHeaderPendingStyle = _afterHeaderPendingStyle.put(attribute);
       if (shouldNotifyListeners) {
         notifyListeners();
       }
       return;
     }
 
-    if (attribute.value == null) {
-  toggledStyle = toggledStyle.removeAll({attribute});
-} else {
-  toggledStyle = toggledStyle.put(attribute);
-}
+    toggledStyle = toggledStyle.put(attribute);
   }
 
   final change = document.format(index, len, attribute);
@@ -750,7 +738,7 @@ Node? probe = line.previous;
 /// Walk upward until we hit a non-empty Line
 while (probe != null) {
   if (probe is Line) {
-    if (probe.toPlainText().trim().isNotEmpty) {
+    if (!probe.isEmpty) {
       break; // found meaningful line
     }
   }
@@ -777,27 +765,31 @@ if (!emptyParagraphAfterHeader) {
 
   _caretOnEmptyParagraphAfterHeader = emptyParagraphAfterHeader;
 
-if (emptyParagraphAfterHeader) {
+ if (emptyParagraphAfterHeader) {
   final prevStyle = document.collectStyle(
-    selection.start > 0 ? selection.start - 1 : 0,
-    0,
-  );
+      selection.start > 0 ? selection.start - 1 : 0,
+      0,
+    );
 
-  final preservedAttrs = prevStyle.attributes.values.where(
-    (a) =>
-        a.isInline &&
-        a.key != Attribute.link.key &&
-        a.key != Attribute.font.key &&
-        a.key != Attribute.size.key,
-  );
+    Style preserved = const Style();
 
-  Style preserved = const Style();
+    final allowedKeys = {
+      Attribute.bold.key,
+      Attribute.italic.key,
+      Attribute.underline.key,
+      Attribute.strikeThrough.key,
+      Attribute.color.key,
+      Attribute.background.key,
+    };
 
-  for (final attr in preservedAttrs) {
-    preserved = preserved.put(attr);
-  }
+    for (final attr in prevStyle.attributes.values) {
+      if (allowedKeys.contains(attr.key)) {
+        preserved = preserved.put(attr);
+      }
+    }
 
-  _afterHeaderPendingStyle = preserved;
+    _afterHeaderPendingStyle = preserved;
+  
 
   // Keep typing state clean; getSelectionStyle() will merge
   // paragraph defaults + _afterHeaderPendingStyle.
@@ -818,7 +810,7 @@ if (emptyParagraphAfterHeader) {
         selection.isCollapsed &&
         currentLine != null &&
         selection.start == currentLine.documentOffset &&
-        currentLine.toPlainText().trim().isNotEmpty;
+        !currentLine.isEmpty;
 
     if (atStartOfNonEmptyLine) {
       // Special case:
@@ -1000,7 +992,7 @@ final currentLine =
     document.querySegmentLeafNode(selection.start).line;
 
 final isEmptyLine =
-    currentLine?.toPlainText().trim().isEmpty ?? false;
+    currentLine?.isEmpty ?? false;
 
 final allowRichPaste = isCollapsed && isEmptyLine;
     if (plainText != null) {
