@@ -624,7 +624,11 @@ if (isDelete) {
       return;
     }
 
-    toggledStyle = toggledStyle.put(attribute);
+    if (attribute.value == null) {
+  toggledStyle = toggledStyle.removeAll({attribute});
+} else {
+  toggledStyle = toggledStyle.put(attribute);
+}
   }
 
   final change = document.format(index, len, attribute);
