@@ -552,6 +552,12 @@ if (isFirst) {
           ..retain(data is String ? data.length : 1, style.toJson());
         document.compose(retainDelta, ChangeSource.local);
       }
+      if (_caretOnEmptyParagraphAfterHeader &&
+    data is String &&
+    data.isNotEmpty &&
+    !data.contains('\n')) {
+  _afterHeaderPendingStyle = const Style();
+}
     }
 
     if (textSelection != null) {
@@ -804,21 +810,16 @@ if (!emptyParagraphAfterHeader) {
 
   _caretOnEmptyParagraphAfterHeader = emptyParagraphAfterHeader;
 
- if (emptyParagraphAfterHeader) {
-  _caretOnEmptyParagraphAfterHeader = true;
-
-  // 🔴 HARD RESET — no inheritance
+ if (!emptyParagraphAfterHeader) {
   _afterHeaderPendingStyle = const Style();
-
-  // 👇 ONLY apply default style when this came from ENTER
- if (_caretOnEmptyParagraphAfterHeader) {
-  toggledStyle = Style.attr({
-    Attribute.font.key:
-        Attribute.fromKeyValue(Attribute.font.key, 'Bornia')!,
-    Attribute.size.key:
-        Attribute.fromKeyValue(Attribute.size.key, '18')!,
-  });
 }
+
+_caretOnEmptyParagraphAfterHeader = emptyParagraphAfterHeader;
+
+if (emptyParagraphAfterHeader) {
+  // Clean baseline after header:
+  // paragraph defaults only, no inherited inline attrs.
+  toggledStyle = const Style();
 
   onSelectionChanged?.call(textSelection);
   return;
