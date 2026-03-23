@@ -420,8 +420,7 @@ if (len > 0 || data is! String || data.isNotEmpty) {
   Style sourceStyle;
 
 if (_caretOnEmptyParagraphAfterHeader) {
-  // 🔴 CRITICAL: do NOT allow inheritance from previous line
-  sourceStyle = _afterHeaderPendingStyle;
+  sourceStyle = _paragraphDefaults.mergeAll(_afterHeaderPendingStyle);
 } else {
   sourceStyle = toggledStyle;
 }
@@ -614,7 +613,13 @@ if (isDelete) {
 }) {
   if (len == 0 && attribute != null && attribute.key != Attribute.link.key) {
     if (_caretOnEmptyParagraphAfterHeader && attribute.isInline) {
-      _afterHeaderPendingStyle = _afterHeaderPendingStyle.put(attribute);
+      if (attribute.value == null) {
+    _afterHeaderPendingStyle =
+        _afterHeaderPendingStyle.removeAll({attribute});
+  } else {
+    _afterHeaderPendingStyle =
+        _afterHeaderPendingStyle.put(attribute);
+  }
       if (shouldNotifyListeners) {
         notifyListeners();
       }
