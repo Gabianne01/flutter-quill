@@ -465,12 +465,9 @@ if (_caretOnEmptyParagraphAfterHeader &&
     ? _paragraphDefaults.mergeAll(_afterHeaderPendingStyle)
     : toggledStyle;
 
-    final isMultiline =
-    data is String &&
-    data.contains('\n') &&
-    data.length > 1;
+   final isPaste = data is Delta;
 
-if (isMultiline) {
+if (isPaste) {
   final firstLine =
       document.querySegmentLeafNode(index).line;
 
