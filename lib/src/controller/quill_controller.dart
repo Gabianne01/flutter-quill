@@ -424,10 +424,9 @@ if (_caretOnEmptyParagraphAfterHeader &&
 
   final int length = data.length;
 
-  final prevStyle = document.collectStyle(
-    index > 0 ? index - 1 : 0,
-    0,
-  );
+  final prevStyle = _caretOnEmptyParagraphAfterHeader
+    ? _paragraphDefaults.mergeAll(_afterHeaderPendingStyle)
+    : document.collectStyle(index > 0 ? index - 1 : 0, 0);
 
   final userStyle = toggledStyle;
 
