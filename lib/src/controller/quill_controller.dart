@@ -804,11 +804,6 @@ if (probe is Line) {
 }
   }
 
-if (!emptyParagraphAfterHeader) {
-  _afterHeaderPendingStyle = const Style();
-}
-
-  _caretOnEmptyParagraphAfterHeader = emptyParagraphAfterHeader;
 
  if (!emptyParagraphAfterHeader) {
   _afterHeaderPendingStyle = const Style();
