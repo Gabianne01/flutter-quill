@@ -151,7 +151,7 @@ bool _isNormalizing = false;
   /// included in the result.
  Style getSelectionStyle() {
   if (_caretOnEmptyParagraphAfterHeader) {
-    return _paragraphDefaults.mergeAll(_afterHeaderPendingStyle);
+    return _paragraphDefaults.mergeAll(toggledStyle);
   }
 
   return document
@@ -404,12 +404,12 @@ final anchorHeader =
     anchorLine != null ? _headerAttrForLine(anchorLine) : null;
 
 final isEmptyLine =
-    anchorLine?.isEmpty ?? false;
+    anchorLine?.toPlainText().trim().isEmpty ?? false;
 
 final anchorInline = isEmptyLine
     ? _inlineOnly(
         _caretOnEmptyParagraphAfterHeader
-            ? _paragraphDefaults.mergeAll(_afterHeaderPendingStyle)
+            ? _paragraphDefaults.mergeAll(toggledStyle)
             : toggledStyle,
       )
     : _inlineOnly(document.collectStyle(index, 0));
@@ -417,13 +417,10 @@ final anchorInline = isEmptyLine
 if (len > 0 || data is! String || data.isNotEmpty) {
   delta = document.replace(index, len, data);
 
-  Style sourceStyle;
+final sourceStyle = _caretOnEmptyParagraphAfterHeader
+    ? _paragraphDefaults.mergeAll(toggledStyle)
+    : toggledStyle;
 
-if (_caretOnEmptyParagraphAfterHeader) {
-  sourceStyle = _paragraphDefaults.mergeAll(_afterHeaderPendingStyle);
-} else {
-  sourceStyle = toggledStyle;
-}
     final isMultiline =
     data is String &&
     data.contains('\n') &&
@@ -510,13 +507,7 @@ if (isFirst) {
           ..retain(data is String ? data.length : 1, style.toJson());
         document.compose(retainDelta, ChangeSource.local);
       }
-      // 👇 ADD THIS
-  if (_caretOnEmptyParagraphAfterHeader &&
-      data is String &&
-      data.isNotEmpty &&
-      !data.contains('\n')) {
-    _afterHeaderPendingStyle = const Style();
-  }
+
     }
 
     if (textSelection != null) {
@@ -612,22 +603,17 @@ if (isDelete) {
   @experimental bool shouldNotifyListeners = true,
 }) {
   if (len == 0 && attribute != null && attribute.key != Attribute.link.key) {
-    if (_caretOnEmptyParagraphAfterHeader && attribute.isInline) {
-      if (attribute.value == null) {
-    _afterHeaderPendingStyle =
-        _afterHeaderPendingStyle.removeAll({attribute});
+  if (attribute.value == null) {
+    toggledStyle = toggledStyle.removeAll({attribute});
   } else {
-    _afterHeaderPendingStyle =
-        _afterHeaderPendingStyle.put(attribute);
-  }
-      if (shouldNotifyListeners) {
-        notifyListeners();
-      }
-      return;
-    }
-
     toggledStyle = toggledStyle.put(attribute);
   }
+
+  if (shouldNotifyListeners) {
+    notifyListeners();
+  }
+  return;
+}
 
   final change = document.format(index, len, attribute);
 
@@ -748,7 +734,7 @@ Node? probe = line.previous;
 /// Walk upward until we hit a non-empty Line
 while (probe != null) {
   if (probe is Line) {
-    if (!probe.isEmpty) {
+    if (probe.toPlainText().trim().isNotEmpty) {
       break; // found meaningful line
     }
   }
@@ -769,42 +755,10 @@ if (probe is Line) {
 }
   }
 
-if (!emptyParagraphAfterHeader) {
-  _afterHeaderPendingStyle = const Style();
-}
+_caretOnEmptyParagraphAfterHeader = emptyParagraphAfterHeader;
 
-  _caretOnEmptyParagraphAfterHeader = emptyParagraphAfterHeader;
-
- if (emptyParagraphAfterHeader) {
-  final prevStyle = document.collectStyle(
-      selection.start > 0 ? selection.start - 1 : 0,
-      0,
-    );
-
-    Style preserved = const Style();
-
-    final allowedKeys = {
-      Attribute.bold.key,
-      Attribute.italic.key,
-      Attribute.underline.key,
-      Attribute.strikeThrough.key,
-      Attribute.color.key,
-      Attribute.background.key,
-    };
-
-    for (final attr in prevStyle.attributes.values) {
-      if (allowedKeys.contains(attr.key)) {
-        preserved = preserved.put(attr);
-      }
-    }
-
-    _afterHeaderPendingStyle = preserved;
-  
-
-  // Keep typing state clean; getSelectionStyle() will merge
-  // paragraph defaults + _afterHeaderPendingStyle.
+if (emptyParagraphAfterHeader) {
   toggledStyle = const Style();
-
   onSelectionChanged?.call(textSelection);
   return;
 }
@@ -820,7 +774,7 @@ if (!emptyParagraphAfterHeader) {
         selection.isCollapsed &&
         currentLine != null &&
         selection.start == currentLine.documentOffset &&
-        !currentLine.isEmpty;
+        currentLine.toPlainText().trim().isNotEmpty;
 
     if (atStartOfNonEmptyLine) {
       // Special case:
@@ -1002,7 +956,7 @@ final currentLine =
     document.querySegmentLeafNode(selection.start).line;
 
 final isEmptyLine =
-    currentLine?.isEmpty ?? false;
+    currentLine?.toPlainText().trim().isEmpty ?? false;
 
 final allowRichPaste = isCollapsed && isEmptyLine;
     if (plainText != null) {
