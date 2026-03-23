@@ -417,9 +417,14 @@ final anchorInline = isEmptyLine
 if (len > 0 || data is! String || data.isNotEmpty) {
   delta = document.replace(index, len, data);
 
-  final sourceStyle = _caretOnEmptyParagraphAfterHeader
-    ? _paragraphDefaults.mergeAll(_afterHeaderPendingStyle)
-    : toggledStyle;
+  Style sourceStyle;
+
+if (_caretOnEmptyParagraphAfterHeader) {
+  // 🔴 CRITICAL: do NOT allow inheritance from previous line
+  sourceStyle = _afterHeaderPendingStyle;
+} else {
+  sourceStyle = toggledStyle;
+}
     final isMultiline =
     data is String &&
     data.contains('\n') &&
