@@ -811,11 +811,14 @@ if (!emptyParagraphAfterHeader) {
   _afterHeaderPendingStyle = const Style();
 
   // 👇 ONLY apply default style when this came from ENTER
-  if (insertNewline) {
-     toggledStyle = _paragraphDefaults;
-  } else {
-
-  }
+ if (_caretOnEmptyParagraphAfterHeader) {
+  toggledStyle = Style.attr({
+    Attribute.font.key:
+        Attribute.fromKeyValue(Attribute.font.key, 'Bornia')!,
+    Attribute.size.key:
+        Attribute.fromKeyValue(Attribute.size.key, '18')!,
+  });
+}
 
   onSelectionChanged?.call(textSelection);
   return;
