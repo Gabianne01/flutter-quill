@@ -417,8 +417,14 @@ final anchorInline = isEmptyLine
 if (len > 0 || data is! String || data.isNotEmpty) {
   delta = document.replace(index, len, data);
 
-final sourceStyle = _caretOnEmptyParagraphAfterHeader
-    ? _paragraphDefaults
+  final isFirstInsertAfterHeader =
+    _caretOnEmptyParagraphAfterHeader &&
+    data is String &&
+    data.isNotEmpty &&
+    !data.contains('\n');
+
+final sourceStyle = isFirstInsertAfterHeader
+    ? _paragraphDefaults.mergeAll(toggledStyle)
     : toggledStyle;
 
     final isMultiline =
@@ -501,12 +507,16 @@ if (isFirst) {
           shouldRetainDelta = false;
         }
       }
-      if (shouldRetainDelta) {
-        final retainDelta = Delta()
-          ..retain(index)
-          ..retain(data is String ? data.length : 1, style.toJson());
-        document.compose(retainDelta, ChangeSource.local);
-      }
+      if (shouldRetainDelta || isFirstInsertAfterHeader) {
+  final retainDelta = Delta()
+    ..retain(index)
+    ..retain(data is String ? data.length : 1, style.toJson());
+  document.compose(retainDelta, ChangeSource.local);
+}
+
+if (isFirstInsertAfterHeader) {
+  _caretOnEmptyParagraphAfterHeader = false;
+}
 
     }
 
