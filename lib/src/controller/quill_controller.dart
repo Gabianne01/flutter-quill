@@ -3,7 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/services.dart' show ClipboardData, Clipboard;
 import 'package:flutter/widgets.dart';
 import 'package:meta/meta.dart';
-import '../document/nodes/node.dart';
+
 import '../../quill_delta.dart';
 import '../common/structs/image_url.dart';
 import '../common/structs/offset_value.dart';
@@ -11,9 +11,9 @@ import '../common/utils/embeds.dart';
 import '../delta/delta_diff.dart';
 import '../document/attribute.dart';
 import '../document/document.dart';
+import '../document/nodes/block.dart';
 import '../document/nodes/embeddable.dart';
 import '../document/nodes/leaf.dart';
-import '../document/nodes/block.dart';
 import '../document/nodes/line.dart';
 import '../document/structs/doc_change.dart';
 import '../document/style.dart';
@@ -112,14 +112,6 @@ class QuillController extends ChangeNotifier {
   /// and that has not been applied yet.
   /// It gets reset after each format action within the [document].
   Style toggledStyle = const Style();
-  final Style _paragraphDefaults = Style.attr({
-  Attribute.font.key: Attribute.fromKeyValue(Attribute.font.key, 'Bornia')!,
-  Attribute.size.key: Attribute.fromKeyValue(Attribute.size.key, '18')!,
-});
-
-bool _caretOnEmptyParagraphAfterHeader = false;
-Style _afterHeaderPendingStyle = const Style();
-bool _isNormalizing = false;
 
   /// [raw_editor_actions] handling of backspace event may need to force the style displayed in the toolbar
   void forceToggledStyle(Style style) {
@@ -149,15 +141,18 @@ bool _isNormalizing = false;
 
   /// Only attributes applied to all characters within this range are
   /// included in the result.
- Style getSelectionStyle() {
-  if (_caretOnEmptyParagraphAfterHeader) {
-    return _paragraphDefaults.mergeAll(_afterHeaderPendingStyle);
-  }
+  Style getSelectionStyle() {
+    if (selection.isCollapsed) {
+      final line = document.querySegmentLeafNode(selection.start).line;
+      if (line != null && line.isEmpty) {
+        return _styleForEmptyLine(line).mergeAll(toggledStyle);
+      }
+    }
 
-  return document
-      .collectStyle(selection.start, selection.end - selection.start)
-      .mergeAll(toggledStyle);
-}
+    return document
+        .collectStyle(selection.start, selection.end - selection.start)
+        .mergeAll(toggledStyle);
+  }
 
   // Increases or decreases the indent of the current selection by 1.
   void indentSelection(bool isIncrease) {
@@ -278,107 +273,125 @@ bool _isNormalizing = false;
         const TextSelection.collapsed(offset: 0));
   }
 
-Style _inlineOnly(Style style) {
-   final attrs = <String, Attribute>{};
-
-  final font = style.attributes[Attribute.font.key];
-  final size = style.attributes[Attribute.size.key];
-
-  if (font != null) attrs[Attribute.font.key] = font;
-  if (size != null) attrs[Attribute.size.key] = size;
-
-  return Style.attr(attrs);
-}
-
-Attribute? _headerAttrForLine(Line line) {
-  final direct = line.style.attributes[Attribute.header.key];
-  if (direct != null) return direct;
-
-  final parent = line.parent;
-  if (parent is Block) {
-    return parent.style.attributes[Attribute.header.key];
-  }
-
-  return null;
-}
-
-void _normalizeLineToStyle(Line line, Style inlineStyle) {
-  final start = line.documentOffset;
-  final textLength = line.length - 1; // 🔴 exclude newline
-
-  if (textLength <= 0) return;
-
-  for (final attr in inlineStyle.values) {
-    formatText(
-      start,
-      textLength,
-      attr,
-      shouldNotifyListeners: false,
-    );
-  }
-}
-
-  void _normalizeLinesBetween(int a, int b) {
-  final start = math.min(a, b);
-  final end   = math.max(a, b);
-
-  int probe = math.max(0, math.min(start, document.length - 2));
-
-  while (probe <= end && probe < document.length - 1) {
-    final line = document.querySegmentLeafNode(probe).line;
-    if (line == null) break;
-
-    _normalizeIfMixed(line);
-
-    probe = line.documentOffset + line.length;
-  }
-}
-
-void _normalizeIfMixed(Line line) {
-  if (line.length <= 1) return;
-
-  final start = line.documentOffset;
-  final end   = start + line.length - 1;
-
-  Style base = _inlineOnly(document.collectStyle(start + 1, 0));
-
-  // 🔧 Fallback if no inline style exists
-  final hasFont = base.attributes.containsKey(Attribute.font.key);
-final hasSize = base.attributes.containsKey(Attribute.size.key);
-
-if (!hasFont || !hasSize) {
-    final header =
-    _headerAttrForLine(line)?.value as int?;
-
-    double size;
-    switch (header) {
-      case 1:
-        size = 36;
-        break;
-      case 2:
-        size = 26;
-        break;
-      default:
-        size = 18;
+  bool _isPasteLikeEdit(int len, Object? data) {
+    if (data is Delta) {
+      return true;
     }
 
-    base = Style.attr({
-      Attribute.font.key:
-          Attribute.fromKeyValue(Attribute.font.key, 'Bornia')!,
-      Attribute.size.key:
-          Attribute.fromKeyValue(Attribute.size.key, size.toString())!,
-    });
+    return data is String &&
+        data.isNotEmpty &&
+        (data.length > 1 || len > 1);
   }
 
-  for (int i = start + 1; i < end; i++) {
-    final s = _inlineOnly(document.collectStyle(i, 0));
-
-    if (s != base) {
-      _normalizeLineToStyle(line, base);
-      return;
+  int _insertedLength(Object? data) {
+    if (data is String) {
+      return data.length;
     }
+    if (data is Delta) {
+      var length = 0;
+      for (final op in data.operations) {
+        if (op.isInsert) {
+          length += op.length ?? 0;
+        }
+      }
+      return length;
+    }
+    if (data is Embeddable) {
+      return 1;
+    }
+    return 0;
   }
-}
+
+  Object? _normalizePastePayload(
+    Object? data,
+    Style targetInlineStyle,
+    Style targetLineStyle,
+  ) {
+    if (data is String) {
+      final delta = Delta();
+      final inlineAttrs = targetInlineStyle.toJson();
+      final lineAttrs = targetLineStyle.toJson();
+      var remaining = data;
+
+      while (remaining.isNotEmpty) {
+        final newlineIndex = remaining.indexOf('\n');
+        if (newlineIndex == -1) {
+          delta.insert(remaining, inlineAttrs);
+          break;
+        }
+
+        if (newlineIndex > 0) {
+          delta.insert(remaining.substring(0, newlineIndex), inlineAttrs);
+        }
+        delta.insert('\n', lineAttrs);
+        remaining = remaining.substring(newlineIndex + 1);
+      }
+
+      return delta;
+    }
+
+    if (data is Delta) {
+      final delta = Delta();
+      final inlineAttrs = targetInlineStyle.toJson();
+      final lineAttrs = targetLineStyle.toJson();
+
+      for (final op in data.operations) {
+        if (!op.isInsert) {
+          delta.push(op);
+          continue;
+        }
+
+        if (op.data is String) {
+          var remaining = op.data as String;
+          while (remaining.isNotEmpty) {
+            final newlineIndex = remaining.indexOf('\n');
+            if (newlineIndex == -1) {
+              delta.insert(remaining, inlineAttrs);
+              break;
+            }
+
+            if (newlineIndex > 0) {
+              delta.insert(remaining.substring(0, newlineIndex), inlineAttrs);
+            }
+            delta.insert('\n', lineAttrs);
+            remaining = remaining.substring(newlineIndex + 1);
+          }
+        } else {
+          delta.push(op);
+        }
+      }
+
+      return delta;
+    }
+
+    return data;
+  }
+
+  Style _inlineStyleForLine(Line line) {
+    for (final leaf in line.children) {
+      if (leaf is QuillText && leaf.value.isNotEmpty) {
+        return _inlineOnly(leaf.style);
+      }
+    }
+
+    return _inlineOnly(document.collectStyle(line.documentOffset, 0));
+  }
+
+  Style _blockStyleForLine(Line line) {
+    final attrs = <String, Attribute>{};
+    attrs.addEntries(line.style.attributes.entries.where(
+      (entry) => entry.value.scope == AttributeScope.block,
+    ));
+
+    final parent = line.parent;
+    if (parent is Block) {
+      attrs.addEntries(parent.style.attributes.entries.where(
+        (entry) => entry.value.scope == AttributeScope.block,
+      ));
+    }
+
+    return Style.attr(attrs);
+  }
 
   void replaceText(
     int index,
@@ -389,152 +402,65 @@ if (!hasFont || !hasSize) {
     @experimental bool shouldNotifyListeners = true,
   }) {
     assert(data is String || data is Embeddable || data is Delta);
-    final editStart = index;
 
     if (onReplaceText != null && !onReplaceText!(index, len, data)) {
       return;
     }
 
+    final shouldNormalizePaste = _isPasteLikeEdit(len, data);
+    final pasteSourceLine = shouldNormalizePaste
+        ? document.querySegmentLeafNode(index).line
+        : null;
+    final normalizePaste = pasteSourceLine != null &&
+        !pasteSourceLine.isEmpty &&
+        !pasteSourceLine.hasEmbed;
+    final pasteInlineStyle =
+        normalizePaste ? _inlineStyleForLine(pasteSourceLine!) : null;
+    final pasteLineStyle =
+        normalizePaste ? _blockStyleForLine(pasteSourceLine!) : null;
+    final normalizedData = normalizePaste
+        ? _normalizePastePayload(
+            data,
+            pasteInlineStyle ?? const Style(),
+            pasteLineStyle ?? const Style(),
+          )
+        : data;
+
     Delta? delta;
-   Style? style;
-   final anchorLine =
-    document.querySegmentLeafNode(index).line;
+    Delta? positionDeltaSource;
+    Style? style;
+    if (len > 0 || normalizedData is! String || normalizedData.isNotEmpty) {
+      delta = document.replace(index, len, normalizedData);
+      positionDeltaSource = delta;
 
-final prevLine = document.querySegmentLeafNode(
-  math.max(0, index - 1),
-).line;
+      if (normalizePaste) {
+        final normalizeEnd =
+            math.min(index + _insertedLength(normalizedData), document.length - 1);
+        final normalizeDelta = document.normalizeLinesInRange(
+          index,
+          normalizeEnd,
+          pasteInlineStyle ?? const Style(),
+          pasteLineStyle ?? const Style(),
+        );
+        if (normalizeDelta.isNotEmpty) {
+          delta = delta.compose(normalizeDelta);
+        }
+      }
 
-final anchorHeader =
-    prevLine != null ? _headerAttrForLine(prevLine) : null;
-
-final isEmptyLine =
-    anchorLine?.isEmpty ?? false;
-
-final anchorInline = isEmptyLine
-    ? _inlineOnly(
-        _caretOnEmptyParagraphAfterHeader
-            ? _paragraphDefaults.mergeAll(_afterHeaderPendingStyle)
-            : toggledStyle,
-      )
-    : _inlineOnly(document.collectStyle(index, 0));
-   
-if (len > 0 || data is! String || data.isNotEmpty) {
-  delta = document.replace(index, len, data);
-
-if (_caretOnEmptyParagraphAfterHeader &&
-    data is String &&
-    data.isNotEmpty &&
-    !data.contains('\n')) {
-
-  final int length = data.length;
-
-  final prevStyle = document.collectStyle(
-    index > 0 ? index - 1 : 0,
-    0,
-  );
-
-  final userStyle = toggledStyle;
-
-  final Delta fixDelta = Delta()..retain(index);
-
-  final Map<String, dynamic> attrs = {};
-
-  // ✅ enforce your paragraph defaults
-  attrs[Attribute.font.key] =
-      Attribute.fromKeyValue(Attribute.font.key, 'Bornia')!.value;
-
-  attrs[Attribute.size.key] =
-      Attribute.fromKeyValue(Attribute.size.key, '18')!.value;
-
-  // 🔴 remove inherited inline attrs (unless user set them)
-  for (final entry in prevStyle.attributes.entries) {
-    final key = entry.key;
-
-    final isInline = entry.value.isInline;
-    if (!isInline) continue;
-
-    final userHasSet = userStyle.attributes.containsKey(key);
-
-    if (!userHasSet) {
-      attrs[key] = null; // 🔴 explicit removal
-    }
-  }
-
-  fixDelta.retain(length, attrs);
-
-  document.compose(fixDelta, ChangeSource.local);
-}
-
-  final sourceStyle = _caretOnEmptyParagraphAfterHeader
-    ? _paragraphDefaults.mergeAll(_afterHeaderPendingStyle)
-    : toggledStyle;
-
-   final isPaste = data is Delta;
-
-if (isPaste) {
-  final firstLine =
-      document.querySegmentLeafNode(index).line;
-
-  final endOffset =
-      index + (data is String ? data.length : 1);
-
-  Line? line = firstLine;
-
-  while (line != null &&
-         line.documentOffset <= endOffset) {
-
-    // 🔴 Remove ANY existing header (including the one Quill moved)
-    final existingHeader = _headerAttrForLine(line);
-
-    if (existingHeader != null) {
-      formatText(
-        line.documentOffset,
-        0,
-        Attribute.clone(existingHeader, null),
-        shouldNotifyListeners: false,
-      );
-    }
-
-    // ✅ Apply header ONLY to first line
-    if (line == firstLine && anchorHeader != null) {
-      formatText(
-        line.documentOffset,
-        0,
-        anchorHeader,
-        shouldNotifyListeners: false,
-      );
-    }
-
-   final isFirst = line == firstLine;
-
-if (isFirst) {
-  // keep header styling
-  _normalizeLineToStyle(line, anchorInline);
-} else {
-  // force paragraph defaults
-  _normalizeLineToStyle(line, _paragraphDefaults);
-}
-
-    final nextOffset = line.documentOffset + line.length;
-    if (nextOffset >= document.length) break;
-
-    line = document.querySegmentLeafNode(nextOffset).line;
-  }
-}
-
-  style = Style.attr(Map<String, Attribute>.fromEntries(
-    sourceStyle.attributes.entries.where(
-      (a) => a.value.scope != AttributeScope.block,
-    ),
-  ));
-
+      /// Remove block styles as they can only be attached to line endings
+      style = Style.attr(Map<String, Attribute>.fromEntries(toggledStyle
+          .attributes.entries
+          .where((a) => a.value.scope != AttributeScope.block)));
       var shouldRetainDelta = style.isNotEmpty &&
+          !normalizePaste &&
           delta.isNotEmpty &&
           delta.length <= 2 &&
           delta.last.isInsert;
-      if (data is String && data.contains('\n') && data.length > 1) {
-  shouldRetainDelta = false;
-}    
+      if (normalizedData is String &&
+          normalizedData.contains('\n') &&
+          normalizedData.length > 1) {
+        shouldRetainDelta = false;
+      }
       if (shouldRetainDelta &&
           style.isNotEmpty &&
           delta.length == 2 &&
@@ -549,88 +475,41 @@ if (isFirst) {
       if (shouldRetainDelta) {
         final retainDelta = Delta()
           ..retain(index)
-          ..retain(data is String ? data.length : 1, style.toJson());
+          ..retain(_insertedLength(normalizedData), style.toJson());
         document.compose(retainDelta, ChangeSource.local);
       }
-      // 👇 ADD THIS
-  if (_caretOnEmptyParagraphAfterHeader &&
-      data is String &&
-      data.isNotEmpty &&
-      !data.contains('\n')) {
-    _afterHeaderPendingStyle = const Style();
-  }
     }
 
     if (textSelection != null) {
       if (delta == null || delta.isEmpty) {
         _updateSelection(textSelection);
       } else {
-        final user = Delta()
-          ..retain(index)
-          ..insert(data)
-          ..delete(len);
-        final positionDelta = getPositionDelta(user, delta);
-       _updateSelection(
-  textSelection.copyWith(
-    baseOffset: textSelection.baseOffset + positionDelta,
-    extentOffset: textSelection.extentOffset + positionDelta,
-  ),
-  insertNewline: data == '\n',
-);
+        if (normalizePaste && data is String) {
+          _updateSelection(textSelection, insertNewline: data == '\n');
+        } else {
+          final user = Delta()
+            ..retain(index)
+            ..insert(normalizedData)
+            ..delete(len);
+          final positionDelta =
+              getPositionDelta(user, positionDeltaSource ?? delta);
+          _updateSelection(
+              textSelection.copyWith(
+                baseOffset: textSelection.baseOffset + positionDelta,
+                extentOffset: textSelection.extentOffset + positionDelta,
+              ),
+              insertNewline: normalizedData == '\n');
+        }
       }
     }
 
     if (ignoreFocus) {
       ignoreFocusOnTextChange = true;
     }
-int insertedLength = 1;
-
-if (data is String) {
-  insertedLength = data.length;
-} else if (data is Embeddable) {
-  insertedLength = 1;
-}
-
-final editEnd = index + math.max(len, insertedLength);
-
-final int normalizeStart =
-    editStart > 0 ? editStart - 1 : 0;
-
-final int normalizeEnd =
-    ((editEnd + 1).toInt() < document.length)
-        ? (editEnd + 1).toInt()
-        : document.length - 1;
-
-final isMultiline =
-    data is String &&
-    data.contains('\n') &&
-    data.length > 1;
-
-if (!_isNormalizing && !isMultiline) {
-  _isNormalizing = true;
-  _normalizeLinesBetween(normalizeStart, normalizeEnd);
-  _isNormalizing = false;
-}
-
-if (shouldNotifyListeners) {
-  notifyListeners();
-}
+    if (shouldNotifyListeners) {
+      notifyListeners();
+    }
     ignoreFocusOnTextChange = false;
- 
- final isDelete = data is String && data.isEmpty && len > 0;
-
-if (isDelete) {
-  WidgetsBinding.instance.addPostFrameCallback((_) {
-    if (_isDisposed) return;
-
-    final sel = selection;
-
-    updateSelection(
-      TextSelection.collapsed(offset: sel.baseOffset),
-      ChangeSource.local,
-    );
-  });
-}
   }
 
   /// Called in two cases:
@@ -648,38 +527,31 @@ if (isDelete) {
   }
 
   void formatText(
-  int index,
-  int len,
-  Attribute? attribute, {
-  @experimental bool shouldNotifyListeners = true,
-}) {
-  if (len == 0 && attribute != null && attribute.key != Attribute.link.key) {
-    if (_caretOnEmptyParagraphAfterHeader && attribute.isInline) {
-      _afterHeaderPendingStyle = _afterHeaderPendingStyle.put(attribute);
-      if (shouldNotifyListeners) {
-        notifyListeners();
-      }
-      return;
+    int index,
+    int len,
+    Attribute? attribute, {
+    @experimental bool shouldNotifyListeners = true,
+  }) {
+    if (len == 0 && attribute!.key != Attribute.link.key) {
+      // Add the attribute to our toggledStyle.
+      // It will be used later upon insertion.
+      toggledStyle = toggledStyle.put(attribute);
     }
 
-    toggledStyle = toggledStyle.put(attribute);
+    final change = document.format(index, len, attribute);
+    // Transform selection against the composed change and give priority to
+    // the change. This is needed in cases when format operation actually
+    // inserts data into the document (e.g. embeds).
+    final adjustedSelection = selection.copyWith(
+        baseOffset: change.transformPosition(selection.baseOffset),
+        extentOffset: change.transformPosition(selection.extentOffset));
+    if (selection != adjustedSelection) {
+      _updateSelection(adjustedSelection);
+    }
+    if (shouldNotifyListeners) {
+      notifyListeners();
+    }
   }
-
-  final change = document.format(index, len, attribute);
-
-  final adjustedSelection = selection.copyWith(
-    baseOffset: change.transformPosition(selection.baseOffset),
-    extentOffset: change.transformPosition(selection.extentOffset),
-  );
-
-  if (selection != adjustedSelection) {
-    _updateSelection(adjustedSelection);
-  }
-
-  if (shouldNotifyListeners) {
-    notifyListeners();
-  }
-}
 
   void formatSelection(Attribute? attribute,
       {@experimental bool shouldNotifyListeners = true}) {
@@ -764,12 +636,31 @@ if (isDelete) {
     super.dispose();
   }
 
-  Line? _previousNonEmptyLineBefore(Line line) {
-  int offset = line.documentOffset - 1;
+  Style _inlineOnly(Style style) {
+  final ignored = style.attributes.values.where(
+    (a) => !a.isInline || a.key == Attribute.link.key,
+  );
+
+  return style.removeAll(ignored.toSet());
+}
+
+Attribute? _headerAttrForLine(Line line) {
+  final direct = line.style.attributes[Attribute.header.key];
+  if (direct != null) return direct;
+
+  final parent = line.parent;
+  if (parent is Block) {
+    return parent.style.attributes[Attribute.header.key];
+  }
+
+  return null;
+}
+
+Line? _previousNonEmptyLineBefore(Line line) {
+  var offset = line.documentOffset - 1;
 
   while (offset >= 0) {
-    final seg = document.querySegmentLeafNode(offset);
-    final candidate = seg.line;
+    final candidate = document.querySegmentLeafNode(offset).line;
     if (candidate == null) return null;
 
     if (candidate.length > 1) {
@@ -782,84 +673,67 @@ if (isDelete) {
   return null;
 }
 
-bool _isHeaderLine(Line? line) => line != null && _headerAttrForLine(line) != null;
+Style _paragraphDefaultStyle() {
+  return Style.attr({
+    Attribute.font.key:
+        Attribute.fromKeyValue(Attribute.font.key, 'Bornia')!,
+    Attribute.size.key:
+        Attribute.fromKeyValue(Attribute.size.key, '18')!,
+  });
+}
 
-  void _updateSelection(TextSelection textSelection, {bool insertNewline = false}) {
+Style _styleForEmptyLine(Line line) {
+  final previous = _previousNonEmptyLineBefore(line);
+
+  if (previous == null) {
+      return const Style();
+  }
+
+  final previousWasHeader = _headerAttrForLine(previous) != null;
+
+  if (previousWasHeader) {
+    return _paragraphDefaultStyle();
+  }
+
+  return _inlineOnly(
+    document.collectStyle(previous.documentOffset, 0),
+  );
+}
+
+
+void _updateSelection(
+  TextSelection textSelection, {
+  bool insertNewline = false,
+}) {
   _selection = textSelection;
+
   final end = document.length - 1;
   _selection = selection.copyWith(
     baseOffset: math.min(selection.baseOffset, end),
     extentOffset: math.min(selection.extentOffset, end),
   );
 
-   bool emptyParagraphAfterHeader = false;
-
-  final segment = document.querySegmentLeafNode(selection.start);
-  final line = segment.line;
-
-  if (line != null && line.isEmpty) {
-    final prevLine = _previousNonEmptyLineBefore(line);
-    emptyParagraphAfterHeader = _isHeaderLine(prevLine);
-  }
-
-  if (!emptyParagraphAfterHeader) {
-    _afterHeaderPendingStyle = const Style();
-  }
-
-  _caretOnEmptyParagraphAfterHeader = emptyParagraphAfterHeader;
-
-  if (emptyParagraphAfterHeader) {
-    toggledStyle = const Style();
-    onSelectionChanged?.call(textSelection);
-    return;
-  }
-
-
-  if (keepStyleOnNewLine) {
-  if (insertNewline) {
-    final segment = document.querySegmentLeafNode(selection.start);
-    final currentLine = segment.line;
-
-    Style style = const Style();
-
-    final atStartOfNonEmptyLine =
-        selection.isCollapsed &&
-        currentLine != null &&
-        selection.start == currentLine.documentOffset &&
-        currentLine.length > 1;
-
-    if (atStartOfNonEmptyLine) {
-      // Special case:
-      // Enter pressed at the start of a styled line, or split produced a
-      // non-empty right-side line and the caret is now at its beginning.
-      //
-      // In this case, sample style from the current line, not the left side.
-      final probeOffset = math.min(
-        selection.start,
-        document.length - 2,
-      );
-
-      style = document.collectStyle(probeOffset, 0);
-    } else if (selection.start > 0) {
-      // Normal Enter behavior:
-      // inherit from the character/line immediately before the caret.
-      style = document.collectStyle(selection.start - 1, 0);
-    }
-
-    final ignoredStyles = style.attributes.values.where(
-      (s) => !s.isInline || s.key == Attribute.link.key,
-    );
-
-    toggledStyle = style.removeAll(ignoredStyles.toSet());
-  } else {
-    toggledStyle = const Style();
-  }
-} else {
   toggledStyle = const Style();
-}
+
+  if (keepStyleOnNewLine && selection.isCollapsed) {
+    final line = document.querySegmentLeafNode(selection.start).line;
+
+    if (line != null && line.isEmpty) {
+      toggledStyle = _styleForEmptyLine(line);
+    } else if (insertNewline && selection.start > 0) {
+      final atStartOfNonEmptyLine = line != null &&
+          selection.start == line.documentOffset &&
+          line.length > 1;
+      final style = atStartOfNonEmptyLine
+          ? document.collectStyle(selection.start, 1)
+          : document.collectStyle(selection.start - 1, 0);
+      toggledStyle = _inlineOnly(style);
+    }
+  }
 
   onSelectionChanged?.call(textSelection);
 }
+
 
   /// Given offset, find its leaf node in document
   Leaf? queryNode(int offset) {
@@ -1002,43 +876,15 @@ bool _isHeaderLine(Line? line) => line != null && _headerAttrForLine(line) != nu
     // Snapshot the input before using `await`.
     // See https://github.com/flutter/flutter/issues/11427
     final plainText = (await Clipboard.getData(Clipboard.kTextPlain))?.text;
-final isCollapsed = selection.isCollapsed;
 
-final currentLine =
-    document.querySegmentLeafNode(selection.start).line;
-
-final isEmptyLine =
-    currentLine?.isEmpty ?? false;
-
-final allowRichPaste = isCollapsed && isEmptyLine;
     if (plainText != null) {
-  final plainTextToPaste = await getTextToPaste(plainText);
-
-  if (allowRichPaste) {
-    // ✅ keep current behavior (rich paste)
-    if (pastePlainTextOrDelta(
-      plainTextToPaste,
-      pastePlainText: _pastePlainText,
-      pasteDelta: _pasteDelta,
-    )) {
-      updateEditor?.call();
-      return true;
+      final plainTextToPaste = await getTextToPaste(plainText);
+      if (pastePlainTextOrDelta(plainTextToPaste,
+          pastePlainText: _pastePlainText, pasteDelta: _pasteDelta)) {
+        updateEditor?.call();
+        return true;
+      }
     }
-  } else {
-    // 🔴 FORCE your pipeline
-    replaceText(
-      selection.start,
-      selection.end - selection.start,
-      plainTextToPaste,
-      TextSelection.collapsed(
-        offset: selection.start + plainTextToPaste.length,
-      ),
-    );
-
-    updateEditor?.call();
-    return true;
-  }
-}
 
     final onUnprocessedPaste = clipboardConfig?.onUnprocessedPaste;
     if (onUnprocessedPaste != null) {
@@ -1095,7 +941,9 @@ final allowRichPaste = isCollapsed && isEmptyLine;
     replaceText(index, len, insertedText, textSelection,
         ignoreFocus: ignoreFocus, shouldNotifyListeners: shouldNotifyListeners);
 
-    _applyPasteStyleAndEmbed(insertedText, index, containsEmbed);
+    if (!insertedText.contains('\n')) {
+      _applyPasteStyleAndEmbed(insertedText, index, containsEmbed);
+    }
   }
 
   void _applyPasteStyleAndEmbed(

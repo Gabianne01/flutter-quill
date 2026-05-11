@@ -4,7 +4,9 @@ import '../../quill_delta.dart';
 import '../common/extensions/uri_ext.dart';
 import '../document/attribute.dart';
 import '../document/document.dart';
+import '../document/nodes/block.dart';
 import '../document/nodes/embeddable.dart';
+import '../document/nodes/line.dart';
 import '../document/style.dart';
 import 'rule.dart';
 
@@ -106,11 +108,20 @@ class PreserveBlockStyleOnInsertRule extends InsertRule {
       return null;
     }
 
+    final isSingleNewline = data == '\n';
+    final splitItr = DeltaIterator(document.toDelta());
+    splitItr.skip(index);
+    final afterOp = splitItr.hasNext ? splitItr.next() : null;
+    final isBeforeExistingText = isSingleNewline &&
+        afterOp != null &&
+        afterOp.data is String &&
+        !(afterOp.data as String).startsWith('\n');
+
     final resetStyle = <String, dynamic>{};
     // If current line had heading style applied to it we'll need to move this
     // style to the newly inserted line before it and reset style of the
     // original line.
-    if (lineStyle.containsKey(Attribute.header.key)) {
+    if (lineStyle.containsKey(Attribute.header.key) && !isBeforeExistingText) {
       resetStyle.addAll(Attribute.header.toJson());
     }
 
@@ -552,6 +563,12 @@ class PreserveInlineStylesRule extends InsertRule {
       return null;
     }
 
+    if (_isEmptyLineAfterHeader(document, index)) {
+      return Delta()
+        ..retain(index + (len ?? 0))
+        ..insert(data);
+    }
+
     final documentDelta = document.toDelta();
     final itr = DeltaIterator(documentDelta);
     len ??= 0;
@@ -615,6 +632,41 @@ class PreserveInlineStylesRule extends InsertRule {
     return Delta()
       ..retain(index + len)
       ..insert(data, attributes.isEmpty ? null : attributes);
+  }
+
+  bool _isEmptyLineAfterHeader(Document document, int index) {
+    final current = document.querySegmentLeafNode(index).line;
+    if (current == null || !current.isEmpty) {
+      return false;
+    }
+
+    var offset = current.documentOffset - 1;
+    while (offset >= 0) {
+      final previous = document.querySegmentLeafNode(offset).line;
+      if (previous == null) {
+        return false;
+      }
+
+      if (previous.length > 1) {
+        return _headerAttrForLine(previous) != null;
+      }
+
+      offset = previous.documentOffset - 1;
+    }
+
+    return false;
+  }
+
+  Attribute? _headerAttrForLine(Line line) {
+    final direct = line.style.attributes[Attribute.header.key];
+    if (direct != null) return direct;
+
+    final parent = line.parent;
+    if (parent is Block) {
+      return parent.style.attributes[Attribute.header.key];
+    }
+
+    return null;
   }
 }
 

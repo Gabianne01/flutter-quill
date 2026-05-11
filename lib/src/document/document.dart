@@ -122,6 +122,20 @@ class Document {
     assert(data is String || data is Embeddable || data is Delta);
 
     var delta = Delta();
+    final deletedText = len > 0 ? getPlainText(index, len) : '';
+    final crossesLineBoundary = deletedText.contains('\n');
+    final isDeleteOnly = data is String && data.isEmpty;
+    final hasTextBeforeMerge =
+        crossesLineBoundary ? _leafExistsAt(index - 1) : false;
+    final hasTextAtMergeStart =
+        crossesLineBoundary ? _leafExistsAt(index) : false;
+    final hasMergeTarget =
+        hasTextBeforeMerge || (!isDeleteOnly && hasTextAtMergeStart);
+    final mergeTargetOffset = hasTextBeforeMerge ? index - 1 : index;
+    final mergeTargetStyle =
+        hasMergeTarget ? _inlineLeafStyleAt(mergeTargetOffset) : null;
+    final mergeTargetLineStyle =
+        hasMergeTarget ? _lineBlockStyleAt(index) : null;
 
     if (data is Delta) {
       // move to insertion point and add the inserted content
@@ -157,7 +171,209 @@ class Document {
       }
     }
 
+    if (crossesLineBoundary && hasMergeTarget) {
+      final safeIndex = index.clamp(0, length - 1) as int;
+      final line = querySegmentLeafNode(safeIndex).line;
+      final normalizeDelta = _normalizeLineStyle(
+        line,
+        mergeTargetStyle ?? const Style(),
+        mergeTargetLineStyle ?? const Style(),
+      );
+      if (normalizeDelta != null) {
+        compose(normalizeDelta, ChangeSource.local);
+        delta = delta.compose(normalizeDelta);
+      }
+    }
+
     return delta;
+  }
+
+  Delta normalizeLinesInRange(
+    int start,
+    int end,
+    Style targetInlineStyle,
+    Style targetLineStyle,
+  ) {
+    if (length <= 0) {
+      return Delta();
+    }
+
+    final rangeStart = start.clamp(0, length - 1) as int;
+    final rangeEnd = end.clamp(0, length - 1) as int;
+    var probe = rangeStart;
+    var delta = Delta();
+
+    while (probe <= rangeEnd && probe < length) {
+      final line = querySegmentLeafNode(probe).line;
+      if (line == null) {
+        break;
+      }
+
+      final normalizeDelta = _normalizeLineStyle(
+        line,
+        targetInlineStyle,
+        targetLineStyle,
+      );
+
+      if (normalizeDelta != null) {
+        compose(normalizeDelta, ChangeSource.local);
+        delta = delta.compose(normalizeDelta);
+      }
+
+      final nextProbe = line.documentOffset + line.length;
+      if (nextProbe <= probe) {
+        break;
+      }
+      probe = nextProbe;
+    }
+
+    return delta;
+  }
+
+  bool _leafExistsAt(int offset) {
+    if (offset < 0 || length <= 0) {
+      return false;
+    }
+
+    final safeOffset = offset.clamp(0, length - 1) as int;
+    return querySegmentLeafNode(safeOffset).leaf != null;
+  }
+
+  Style _inlineLeafStyleAt(int offset) {
+    if (offset < 0 || length <= 0) {
+      return const Style();
+    }
+
+    final safeOffset = offset.clamp(0, length - 1) as int;
+    final leaf = querySegmentLeafNode(safeOffset).leaf;
+    if (leaf == null) {
+      return const Style();
+    }
+
+    return _inlineOnly(leaf.style);
+  }
+
+  Style _inlineOnly(Style style) {
+    final inlineAttrs = <String, Attribute>{};
+    for (final entry in style.attributes.entries) {
+      final attr = entry.value;
+      if (attr.isInline && attr.key != Attribute.link.key) {
+        inlineAttrs[entry.key] = attr;
+      }
+    }
+    return Style.attr(inlineAttrs);
+  }
+
+  Style _lineBlockStyleAt(int offset) {
+    if (length <= 0) {
+      return const Style();
+    }
+
+    final safeOffset = offset.clamp(0, length - 1) as int;
+    final line = querySegmentLeafNode(safeOffset).line;
+    if (line == null) {
+      return const Style();
+    }
+
+    final attrs = <String, Attribute>{};
+    attrs.addEntries(line.style.attributes.entries.where(
+      (entry) => entry.value.scope == AttributeScope.block,
+    ));
+
+    final parent = line.parent;
+    if (parent is Block) {
+      attrs.addEntries(parent.style.attributes.entries.where(
+        (entry) => entry.value.scope == AttributeScope.block,
+      ));
+    }
+
+    return Style.attr(attrs);
+  }
+
+  Delta? _normalizeLineStyle(
+    Line? line,
+    Style targetInlineStyle,
+    Style targetLineStyle,
+  ) {
+    if (line == null || line.length <= 1) {
+      return null;
+    }
+
+    final attrs = <String, dynamic>{
+      for (final entry in targetInlineStyle.attributes.entries)
+        entry.key: entry.value.value,
+    };
+
+    for (final key in _inlineKeysInLine(line)) {
+      if (!attrs.containsKey(key)) {
+        attrs[key] = null;
+      }
+    }
+
+    final lineAttrs = <String, dynamic>{
+      for (final entry in targetLineStyle.attributes.entries)
+        entry.key: entry.value.value,
+    };
+
+    for (final key in _blockKeysInLine(line)) {
+      if (!lineAttrs.containsKey(key)) {
+        lineAttrs[key] = null;
+      }
+    }
+
+    if (attrs.isEmpty && lineAttrs.isEmpty) {
+      return null;
+    }
+
+    final delta = Delta()..retain(line.documentOffset);
+    if (attrs.isNotEmpty) {
+      delta.retain(line.length - 1, attrs);
+    } else {
+      delta.retain(line.length - 1);
+    }
+
+    if (lineAttrs.isNotEmpty) {
+      delta.retain(1, lineAttrs);
+    }
+
+    return delta;
+  }
+
+  Set<String> _inlineKeysInLine(Line line) {
+    final keys = <String>{};
+    for (final leaf in line.children) {
+      if (leaf == null) {
+        continue;
+      }
+
+      for (final attr in leaf.style.attributes.values) {
+        if (attr.isInline && attr.key != Attribute.link.key) {
+          keys.add(attr.key);
+        }
+      }
+    }
+    return keys;
+  }
+
+  Set<String> _blockKeysInLine(Line line) {
+    final keys = <String>{};
+
+    for (final attr in line.style.attributes.values) {
+      if (attr.scope == AttributeScope.block) {
+        keys.add(attr.key);
+      }
+    }
+
+    final parent = line.parent;
+    if (parent is Block) {
+      for (final attr in parent.style.attributes.values) {
+        if (attr.scope == AttributeScope.block) {
+          keys.add(attr.key);
+        }
+      }
+    }
+
+    return keys;
   }
 
   /// Formats segment of this document with specified [attribute].

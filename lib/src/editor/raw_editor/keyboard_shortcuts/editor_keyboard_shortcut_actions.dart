@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../../../document/attribute.dart';
+import '../../../document/nodes/block.dart';
+import '../../../document/nodes/line.dart';
 import '../../../document/style.dart';
 import '../../../toolbar/buttons/link_style/link_style2_button.dart';
 import '../../../toolbar/buttons/search/search_dialog.dart';
@@ -38,14 +40,18 @@ class QuillEditorDeleteTextAction<T extends DirectionalTextEditingIntent>
     final selection = state.textEditingValue.selection;
     assert(selection.isValid);
 
+    var deletingLineBoundary = false;
+
     Object? execute() {
       if (!selection.isCollapsed) {
+        final range = _expandNonCollapsedRange(state.textEditingValue);
+        deletingLineBoundary = _rangeContainsLineBreak(range);
         return Actions.invoke(
           context!,
           ReplaceTextIntent(
               state.textEditingValue,
               '',
-              _expandNonCollapsedRange(state.textEditingValue),
+              range,
               SelectionChangedCause.keyboard),
         );
       }
@@ -55,23 +61,27 @@ class QuillEditorDeleteTextAction<T extends DirectionalTextEditingIntent>
         return null;
       }
       if (!textBoundary.textEditingValue.selection.isCollapsed) {
+        final range = _expandNonCollapsedRange(textBoundary.textEditingValue);
+        deletingLineBoundary = _rangeContainsLineBreak(range);
         return Actions.invoke(
           context!,
           ReplaceTextIntent(
               state.textEditingValue,
               '',
-              _expandNonCollapsedRange(textBoundary.textEditingValue),
+              range,
               SelectionChangedCause.keyboard),
         );
       }
 
+      final range = textBoundary
+          .getTextBoundaryAt(textBoundary.textEditingValue.selection.base);
+      deletingLineBoundary = _rangeContainsLineBreak(range);
       return Actions.invoke(
         context!,
         ReplaceTextIntent(
           textBoundary.textEditingValue,
           '',
-          textBoundary
-              .getTextBoundaryAt(textBoundary.textEditingValue.selection.base),
+          range,
           SelectionChangedCause.keyboard,
         ),
       );
@@ -113,10 +123,90 @@ class QuillEditorDeleteTextAction<T extends DirectionalTextEditingIntent>
     }
     //
     final result = execute();
-    if (postStyle != null) {
-      state.controller.forceToggledStyle(postStyle);
+    if (postStyle != null && !_selectionIsEmptyLineAfterHeader()) {
+      state.controller.forceToggledStyle(
+        deletingLineBoundary ? _styleAtSelectionAfterDelete() : postStyle,
+      );
     }
     return result;
+  }
+
+  Style _styleAtSelectionAfterDelete() {
+    final controller = state.controller;
+    final selection = controller.selection;
+    if (!selection.isValid || !selection.isCollapsed) {
+      return const Style();
+    }
+
+    final line = controller.document.querySegmentLeafNode(selection.start).line;
+    if (line == null || line.isEmpty) {
+      return const Style();
+    }
+
+    final lineTextEnd = line.documentOffset + line.length - 1;
+    final probe = selection.start < lineTextEnd
+        ? selection.start
+        : selection.start - 1;
+    return _inlineOnly(controller.document.collectStyle(probe, 0));
+  }
+
+  Style _inlineOnly(Style style) {
+    final ignored = style.attributes.values.where(
+      (a) => !a.isInline || a.key == Attribute.link.key,
+    );
+
+    return style.removeAll(ignored.toSet());
+  }
+
+  bool _rangeContainsLineBreak(TextRange range) {
+    if (!range.isValid || range.isCollapsed) {
+      return false;
+    }
+
+    return state.controller.document
+        .getPlainText(range.start, range.end - range.start)
+        .contains('\n');
+  }
+
+  bool _selectionIsEmptyLineAfterHeader() {
+    final controller = state.controller;
+    final selection = controller.selection;
+    if (!selection.isValid || !selection.isCollapsed) {
+      return false;
+    }
+
+    final line = controller.document.querySegmentLeafNode(selection.start).line;
+    if (line == null || !line.isEmpty) {
+      return false;
+    }
+
+    var offset = line.documentOffset - 1;
+    while (offset >= 0) {
+      final previous = controller.document.querySegmentLeafNode(offset).line;
+      if (previous == null) {
+        return false;
+      }
+
+      if (previous.length > 1) {
+        return _headerAttrForLine(previous) != null;
+      }
+
+      offset = previous.documentOffset - 1;
+    }
+
+    return false;
+  }
+
+  Attribute? _headerAttrForLine(Line line) {
+    final direct = line.style.attributes[Attribute.header.key];
+    if (direct != null) return direct;
+
+    final parent = line.parent;
+    if (parent is Block) {
+      return parent.style.attributes[Attribute.header.key];
+    }
+
+    return null;
   }
 
   @override
