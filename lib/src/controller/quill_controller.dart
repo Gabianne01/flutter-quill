@@ -851,6 +851,8 @@ void _updateSelection(
           updateEditor?.call();
           return true;
         }
+        updateEditor?.call();
+        return true;
       }
     }
 
