@@ -1419,9 +1419,11 @@ class RenderEditableTextLine extends RenderEditableBox {
           line.documentOffset <= textSelection.end &&
           textSelection.start <= line.documentOffset + line.length - 1) {
         final local = localSelection(line, textSelection, false);
-        _selectedRects ??= _body!.getBoxesForSelection(
-          local,
-        );
+       _selectedRects ??= [
+  ..._body!.getBoxesForSelection(
+    local,
+  ),
+];
 
         // Paint a small rect at the start of empty lines that
         // are contained by the selection.
