@@ -194,6 +194,10 @@ mixin RawEditorStateTextInputClientMixin on EditorState
   }
 
   // Start TextInputClient implementation
+  // Flutter 3.44 added this callback. Match TextInputClient's default until
+  // this Quill fork adopts platform focus restoration itself.
+  @override
+  bool onFocusReceived() => false;
   @override
   TextEditingValue? get currentTextEditingValue =>
       _lastKnownRemoteTextEditingValue;
