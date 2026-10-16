@@ -564,7 +564,7 @@ base class Line extends QuillContainer<Leaf?> {
       // the content has a unexpected behaviors
       if (data != Embed.kObjectReplacementCharacter) {
         buffer.write(data);
-        return remaining;
+        return remaining - node.length;
       } else {
         buffer.write(action.call(data));
       }
@@ -593,7 +593,7 @@ base class Line extends QuillContainer<Leaf?> {
     final data = queryChild(offset, false);
     var node = data.node as Leaf?;
 
-    while (len0 > 0) {
+    if (len0 > 0) {
       if (node == null) {
         // blank line
         plainText.write('\n');
